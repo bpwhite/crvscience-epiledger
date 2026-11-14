@@ -152,10 +152,9 @@ impl EpiTuiState {
 
         let cached_wis = run_rolling_wis_backtest_and_ensemble(
             &counts,
-            &rt_cfg,
-            &seir_cfg,
             &BacktestConfig::default(),
-        );
+            &seir_cfg,
+        )?;
 
         let spent_epsilon = get_vintage_spent_epsilon(&store, &active_dataset.vintage_id)?;
         let audit_ver = verify_audit_chain(&store)?;
@@ -213,12 +212,13 @@ impl EpiTuiState {
             if let Ok(sg) = project_hospital_surge_from_seir(&self.cached_seir, &self.surge_cfg) {
                 self.cached_surge = sg;
             }
-            self.cached_wis = run_rolling_wis_backtest_and_ensemble(
+            if let Ok(wis) = run_rolling_wis_backtest_and_ensemble(
                 &counts,
-                &self.rt_cfg,
-                &self.seir_cfg,
                 &BacktestConfig::default(),
-            );
+                &self.seir_cfg,
+            ) {
+                self.cached_wis = wis;
+            }
         }
         self.refresh_governance();
     }
@@ -239,14 +239,14 @@ impl EpiTuiState {
         cfg.epsilon = 0.50;
         match release_differentially_private_series(&self.store, &self.active_dataset, &cfg) {
             Ok(out) => {
-                let _ = self.store.commit_vintage(&out.released_dataset);
+                let _ = self.store.commit_vintage(&out.noisy_dataset);
                 self.refresh_governance();
                 if let Ok(list) = self.store.list_vintages() {
                     self.vintages = list;
                 }
                 self.status_line = format!(
                     "Committed Discrete Laplace DP vintage '{}' (eps=0.50, empirical RMSE={:.2}, spent={:.2}).",
-                    out.released_dataset.vintage_id, out.empirical_rmse, out.cumulative_epsilon_spent
+                    out.noisy_dataset.vintage_id, out.empirical_rmse, out.cumulative_epsilon_for_vintage
                 );
             }
             Err(e) => {
@@ -260,13 +260,11 @@ impl EpiTuiState {
         let ctx = SitRepContext {
             dataset: &self.active_dataset,
             suppression_policy: self.suppression_policy,
-            rt: &self.cached_rt,
-            aberration: &self.cached_ab,
+            rt_series: &self.cached_rt,
+            ab_series: &self.cached_ab,
             nowcast: &self.cached_nowcast,
             backtest: &self.cached_wis,
-            top_clusters: &self.cached_clusters,
-            analyst_notes:
-                "Generated headlessly from EpiLedger ratatui SSH Terminal User Interface.",
+            spatial_clusters: &self.cached_clusters,
         };
         let html = render_standalone_sitrep_html(&ctx);
         match std::fs::write(out_path, html) {
@@ -740,11 +738,11 @@ fn draw_spatial_scan_tab(f: &mut Frame<'_>, app: &EpiTuiState, area: Rect) {
                 Cell::from(c.center_id.clone()),
                 Cell::from(format!("{}", c.member_ids.len())),
                 Cell::from(format!("{:.0} km", c.radius_km)),
-                Cell::from(format!("{:.0}", c.observed)),
-                Cell::from(format!("{:.1}", c.expected)),
+                Cell::from(format!("{:.0}", c.observed_cases)),
+                Cell::from(format!("{:.1}", c.expected_cases)),
                 Cell::from(format!("{:.2}x", c.relative_risk)),
-                Cell::from(format!("{:.2}", c.llr)),
-                Cell::from(format!("{:.4}", c.monte_carlo_p)),
+                Cell::from(format!("{:.2}", c.kulldorff_llr)),
+                Cell::from(format!("{:.4}", c.monte_carlo_p_value)),
             ])
         })
         .collect();
@@ -1025,12 +1023,12 @@ fn draw_wis_ensemble_tab(f: &mut Frame<'_>, app: &EpiTuiState, area: Rect) {
         .iter()
         .map(|sc| {
             Row::new(vec![
-                Cell::from(sc.model_name.clone()),
+                Cell::from(sc.model_label.clone()),
                 Cell::from(format!("{:.2}", sc.mean_wis)),
                 Cell::from(format!("{:.3}", sc.mean_log_wis)),
                 Cell::from(format!("{:.2}", sc.mean_sharpness)),
-                Cell::from(format!("{:.1}%", sc.coverage_95 * 100.0)),
-                Cell::from(format!("{:.1}%", sc.learned_inverse_wis_weight * 100.0)),
+                Cell::from(format!("{:.1}%", sc.coverage_95_pct)),
+                Cell::from(format!("{:.1}%", sc.final_ensemble_weight * 100.0)),
             ])
         })
         .collect();
@@ -1109,9 +1107,9 @@ fn draw_dp_audit_tab(f: &mut Frame<'_>, app: &EpiTuiState, area: Rect) {
         .map(|e| {
             let short_hash: String = e.entry_hash_hex.chars().take(12).collect();
             Row::new(vec![
-                Cell::from(format!("#{}", e.seq_id)),
+                Cell::from(format!("#{}", e.seq_no)),
                 Cell::from(e.action_kind.clone()),
-                Cell::from(e.target_id.clone()),
+                Cell::from(e.target_ref.clone()),
                 Cell::from(short_hash),
             ])
         })

@@ -8,3 +8,10 @@ description = "Pure-Rust epidemiological, right-truncated cCFR & competing-risk 
 [dependencies]
 epi-core = { path = "../epi-core" }
 serde.workspace = true
+
+[dev-dependencies]
+csv.workspace = true
+epi-ingest = { path = "../epi-ingest" }
+epi-store = { path = "../epi-store" }
+rusqlite.workspace = true
+serde_json.workspace = true

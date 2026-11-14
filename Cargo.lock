@@ -1039,8 +1039,13 @@ dependencies = [
 name = "epi-analytics"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "epi-core",
+ "epi-ingest",
+ "epi-store",
+ "rusqlite",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

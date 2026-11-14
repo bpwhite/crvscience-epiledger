@@ -607,26 +607,57 @@ pub fn link_and_deduplicate_pprl(
 /// Generate a synthetic multi-facility hospital/ELR benchmark of `num_unique` patients (plus ~35% repeat
 /// typographical/follow-up encounters) to benchmark sub-quadratic hash-blocked PPRL throughput.
 pub fn generate_synthetic_pprl_scale_benchmark(num_unique: usize) -> Vec<PprlDemographicInput> {
-    let surnames = [
-        "HERNANDEZ", "KOWALSKI", "CHEN", "OKAFOR", "LINDQVIST", "PATEL", "NGUYEN", "SORENSEN",
-        "TAKAHASHI", "CAMPBELL", "RAMIREZ", "ALVAREZ", "MENSAH", "NOVAK", "DESAI", "WEBER",
+    let syl_a = [
+        "BAL", "COR", "DEN", "FAR", "GAR", "HAL", "JEN", "KOR", "LAN", "MAR", "NOR", "PAL",
+        "RAN", "SAL", "TAL", "VAL", "WAR", "ZAR", "BEL", "CAR", "DAL", "FEN", "GEL", "HAR",
+        "KEL", "LOR", "MEL", "NEL", "PER", "REN", "SEL", "TER",
     ];
-    let givens = [
-        "ELENA", "JONATHAN", "MARCUS", "CHIDI", "ASTRID", "DEVIKA", "MINH", "FREJA", "KENJI",
-        "IAN", "MATEO", "SOFIA", "KWAME", "PETRA", "PRIYA", "HANNAH",
+    let syl_b = [
+        "TON", "SON", "MAN", "BERG", "FORD", "WOOD", "FIELD", "BROOK", "WELL", "LAND", "STONE",
+        "HART", "SHAW", "WARD", "DALE", "ROSS", "BACH", "KAMP", "MONT", "VIAL", "CRUZ", "VEGA",
+        "LOPEZ", "SILVA", "COSTA", "MORI", "SATO", "KATO", "WANG", "ZHAO", "CHOI", "PARK",
+    ];
+    let g_pre = [
+        "AL", "AN", "BE", "CA", "DA", "EL", "FR", "GA", "HA", "IR", "JO", "KA", "LA", "MA",
+        "NA", "OL", "PA", "RA", "SA", "TA", "VA", "WI", "YA", "ZA", "CH", "DR", "EM", "FL",
+        "GR", "HE", "IS", "LU",
+    ];
+    let g_suf = [
+        "EX", "NA", "ON", "IA", "EL", "US", "EN", "AR", "IS", "YN", "OR", "AD", "ET", "IM",
+        "OS", "UL", "ER", "AT", "IN", "AS", "EB", "OD", "IV", "UR", "AK", "EM", "OT", "IL",
+        "AN", "ES", "OC", "AM",
     ];
 
     let n_u = num_unique.clamp(10, 20_000);
     let mut out = Vec::with_capacity(n_u + n_u / 3);
+    let mix64 = |mut z: u64| -> u64 {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
     for i in 0..n_u {
-        let fn_base = format!("{}{}", surnames[i % surnames.len()], i / surnames.len());
-        let gn_base = format!("{}{}", givens[(i * 7) % givens.len()], (i / 16) % 97);
-        let yr = 1945 + (i % 78);
-        let mo = 1 + ((i * 3) % 12);
-        let dy = 1 + ((i * 5) % 28);
+        let h1 = mix64(i as u64 + 1);
+        let h2 = mix64(h1 ^ 0xA5A5_5A5A_1234_5678);
+        let fn_base = format!(
+            "{}{}{}",
+            syl_a[(h1 as usize) % syl_a.len()],
+            syl_b[((h1 >> 6) as usize) % syl_b.len()],
+            (b'A' + (((h1 >> 12) as u8) % 26)) as char,
+        );
+        let gn_base = format!(
+            "{}{}{}{}",
+            g_pre[(h2 as usize) % g_pre.len()],
+            g_suf[((h2 >> 6) as usize) % g_suf.len()],
+            (b'A' + (((h2 >> 12) as u8) % 26)) as char,
+            (b'A' + (((h2 >> 17) as u8) % 26)) as char,
+        );
+        let yr = 1940 + (((h1 >> 30) as usize) % 85);
+        let mo = 1 + (((h1 >> 38) as usize) % 12);
+        let dy = 1 + (((h1 >> 43) as usize) % 28);
         let dob = format!("{yr:04}{mo:02}{dy:02}");
-        let sex = if i % 2 == 0 { "F" } else { "M" };
-        let zip = format!("{:05}", 97001 + (i % 450));
+        let sex = if ((h2 >> 30) & 1) == 0 { "F" } else { "M" };
+        let zip = format!("{:05}", 10001 + (((h2 >> 32) as usize) % 89_000));
         let day0 = (i % 60) as f64;
 
         out.push(PprlDemographicInput {

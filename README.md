@@ -41,3 +41,34 @@ cargo run --release -p epi-app -- hospital-surge builtin 55 32
 cargo run --release -p epi-app -- dp-release cdc_measles_2022_2026_v1 0.50 4.0 measles_dp.csv
 cargo run --release -p epi-app -- audit-verify 20
 ```
+
+## Headless Validation
+
+Run the headless validation suite exercising `(epsilon, 0)` Discrete Laplace differential privacy & SHA-256 hash-chain tamper detection, 512-bit CLK Bloom-filter PPRL + NSSP ESSENCE `NegEx`, Cori renewal `Rt` estimation, and Freyja L1 wastewater deconvolution:
+
+```bash
+cargo test -p epi-analytics --test headless_validation -- --nocapture
+```
+
+Validation artifacts (`epiledger_validation_summary.json` and `cori_rt_and_dp_audit.csv`) are documented in [`validation/README.md`](validation/README.md).
+
+## Citation & CRV Science Apps Hub
+
+- **CRV Science Apps Hub**: <https://crvscience.com/apps>
+- **Preprint (`APP-PREPRINT-06`)**: [EpiLedger: Differentially Private Public Health Surveillance, Bloom-Filter Record Linkage, and Renewal Rt Estimation](https://crvscience.com/apps/preprints/epiledger-differential-privacy-epidemiology)
+- **Concept DOI**: [`10.5281/zenodo.24222382`](https://doi.org/10.5281/zenodo.24222382)
+
+```bibtex
+@article{white2026epiledger,
+  author  = {Bryan P. White},
+  title   = {EpiLedger: Differentially Private Public Health Surveillance, Bloom-Filter Record Linkage, and Renewal Rt Estimation},
+  year    = {2026},
+  journal = {CRV Science Apps Preprints},
+  note    = {APP-PREPRINT-06, v2.0.0},
+  doi     = {10.5281/zenodo.24222382},
+  url     = {https://crvscience.com/apps/preprints/epiledger-differential-privacy-epidemiology}
+}
+```
+
+See [`CITATION.cff`](CITATION.cff) for machine-readable citation metadata.
+

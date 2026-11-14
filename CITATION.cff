@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+message: "If you use EpiLedger in your research, please cite the software and its CRV Science Apps preprint below."
+title: "EpiLedger"
+version: "2.0.0"
+date-released: "2026-11-14"
+doi: "10.5281/zenodo.24222382"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.24222382"
+    description: "Zenodo Concept DOI for CRV Science Apps Preprint APP-PREPRINT-06"
+license:
+  - MIT
+  - Apache-2.0
+repository-code: "https://github.com/bpwhite/crvscience-epiledger"
+url: "https://crvscience.com/apps"
+authors:
+  - family-names: "White"
+    given-names: "Bryan P."
+    affiliation: "CRV Science Labs"
+keywords:
+  - differential-privacy
+  - public-health-surveillance
+  - privacy-preserving-record-linkage
+  - bloom-filter
+  - effective-reproduction-number
+  - wastewater-epidemiology
+  - rust
+preferred-citation:
+  type: article
+  title: "EpiLedger: Differentially Private Public Health Surveillance, Bloom-Filter Record Linkage, and Renewal Rt Estimation"
+  authors:
+    - family-names: "White"
+      given-names: "Bryan P."
+      affiliation: "CRV Science Labs"
+  doi: "10.5281/zenodo.24222382"
+  url: "https://crvscience.com/apps/preprints/epiledger-differential-privacy-epidemiology"
+  collection-title: "CRV Science Apps Preprints"
+  year: 2026
+  notes: "APP-PREPRINT-06"
