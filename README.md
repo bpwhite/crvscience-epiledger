@@ -61,7 +61,7 @@ Validation artifacts (`epiledger_validation_summary.json` and `cori_rt_and_dp_au
 ```bibtex
 @article{white2026epiledger,
   author  = {Bryan P. White},
-  title   = {EpiLedger: Differentially Private Public Health Surveillance, Bloom-Filter Record Linkage, and Renewal Rt Estimation},
+  title   = {EpiLedger: Privacy-Safe Disease Tracking, Clinical Text Screening, and Outbreak Monitoring},
   year    = {2026},
   journal = {CRV Science Apps Preprints},
   note    = {APP-PREPRINT-06, v2.0.0},

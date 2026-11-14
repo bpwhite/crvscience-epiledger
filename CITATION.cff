@@ -27,7 +27,7 @@ keywords:
   - rust
 preferred-citation:
   type: article
-  title: "EpiLedger: Differentially Private Public Health Surveillance, Bloom-Filter Record Linkage, and Renewal Rt Estimation"
+  title: "EpiLedger: Privacy-Safe Disease Tracking, Clinical Text Screening, and Outbreak Monitoring"
   authors:
     - family-names: "White"
       given-names: "Bryan P."
