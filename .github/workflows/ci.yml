@@ -1,0 +1,76 @@
+name: EpiLedger Rust CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check-test-and-cli-smoke:
+    name: Workspace Check, Unit Tests & Headless CLI Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux X11 / Wayland / Vulkan headers for eframe
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgtk-3-dev pkg-config
+
+      - name: Install stable Rust toolchain + clippy + rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo registry & target build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Clippy across all 5 workspace crates
+        run: cargo clippy --workspace --all-targets
+
+      - name: Run deterministic unit test suite across all 5 crates
+        run: cargo test --workspace -- --nocapture
+
+      - name: Build release binary (`epiledger`)
+        run: cargo build --release -p epi-app
+
+      - name: Run headless CLI regression smoke checks
+        shell: bash
+        run: |
+          export EPILEDGER_DB="${RUNNER_TEMP}/ci_smoke.sqlite3"
+          BIN="./target/release/epiledger"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            BIN="./target/release/epiledger.exe"
+          fi
+          "${BIN}" vintages
+          "${BIN}" analyze
+          "${BIN}" nowcast
+          "${BIN}" seir-forecast cdc_measles_2022_2026_v1 12 80
+          "${BIN}" backtest-wis cdc_measles_2022_2026_v1 4 10
+          "${BIN}" dp-release cdc_measles_2022_2026_v1 0.50 4.0 "${RUNNER_TEMP}/dp_out.csv"
+          "${BIN}" audit-verify 10
+          "${BIN}" pprl-bench 400 blocked
+          "${BIN}" offspring-k builtin all
+          "${BIN}" contact-network builtin "${RUNNER_TEMP}/bipartite.dot"
+          "${BIN}" wastewater-demix builtin log2 40
+          "${BIN}" antibiogram builtin dedup
+          "${BIN}" capture-recapture builtin
+          "${BIN}" syndromic-classify builtin
+          "${BIN}" cfr-adjust builtin 13.5 26
+          "${BIN}" hospital-surge builtin 55 32
+          "${BIN}" export-sitrep cdc_measles_2022_2026_v1 "${RUNNER_TEMP}/sitrep.html" mask
+          test -s "${RUNNER_TEMP}/sitrep.html"

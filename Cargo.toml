@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/epi-core",
+    "crates/epi-store",
+    "crates/epi-ingest",
+    "crates/epi-analytics",
+    "crates/epi-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Bryan P. White <crvscience.com>"]
+description = "Native Rust public health informatics workbench with 16-tab wgpu/egui GUI, 8-view ratatui SSH TUI, and 40-command CLI"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
+csv = "1.3"
+sha2 = "0.10"
+eframe = { version = "0.28", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
+egui = "0.28"
+egui_plot = "0.28"
+rfd = "0.14"
+ratatui = "0.28"
+crossterm = "0.28"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

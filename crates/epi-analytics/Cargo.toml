@@ -1,0 +1,10 @@
+[package]
+name = "epi-analytics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust epidemiological, right-truncated cCFR & competing-risk ICU surge, 3-source capture-recapture, wastewater SNV demixing, CLSI M39 AMR antibiogram, superspreading network, forecast-scoring, environmental, & phylodynamic analytics"
+
+[dependencies]
+epi-core = { path = "../epi-core" }
+serde.workspace = true
