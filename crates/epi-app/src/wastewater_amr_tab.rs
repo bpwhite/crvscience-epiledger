@@ -1,3 +1,18 @@
+// Copyright (C) 2026 CRV Science Network (https://crvscience.com)
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://gnu.org>.
+
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{Bar, BarChart, HLine, Legend, Line, Plot, PlotPoints};
 use epi_analytics::{
@@ -387,6 +402,22 @@ impl WastewaterAmrWorkbenchState {
                     .legend(Legend::default())
                     .x_axis_label("Sampling Week Index")
                     .y_axis_label("Lineage Copies / L")
+                    .y_axis_min_width(58.0)
+                    .y_axis_formatter(|mark, _range| {
+                        let v = mark.value;
+                        if v.abs() >= 1_000_000.0 {
+                            format!("{:.1}M", v / 1_000_000.0)
+                        } else if v.abs() >= 1_000.0 {
+                            let k = v / 1_000.0;
+                            if (k - k.round()).abs() < 0.05 {
+                                format!("{:.0}k", k)
+                            } else {
+                                format!("{:.1}k", k)
+                            }
+                        } else {
+                            format!("{:.0}", v)
+                        }
+                    })
                     .show(ui, |plot_ui| {
                         for (k_idx, lin_name) in self.ww_result.lineage_names.iter().enumerate() {
                             let pts: Vec<[f64; 2]> = self

@@ -1,3 +1,18 @@
+// Copyright (C) 2026 CRV Science Network (https://crvscience.com)
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://gnu.org>.
+
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use epi_core::TimeSeriesDataset;
@@ -79,6 +94,28 @@ impl DpAuditWorkbenchState {
             self.chain_verification = ver;
         }
         self.audit_entries = list_audit_events(store, 40).unwrap_or_default();
+    }
+
+    pub fn trigger_dp_release_demo(
+        &mut self,
+        store: &EpiStore,
+        active_dataset: &TimeSeriesDataset,
+        status_banner: &mut String,
+    ) {
+        if let Ok(outcome) =
+            release_differentially_private_series(store, active_dataset, &self.dp_cfg)
+        {
+            *status_banner = format!(
+                "Released DP series (eps={:.2}, cum={:.2}/{:.2}, empirical MAE={:.2}, audit={}).",
+                outcome.epsilon_spent,
+                outcome.cumulative_epsilon_for_vintage,
+                self.dp_cfg.max_budget_cap,
+                outcome.empirical_mae,
+                &outcome.audit_entry_hash[0..12]
+            );
+            self.last_dp_outcome = Some(outcome);
+            self.refresh_from_store(store, &active_dataset.vintage_id);
+        }
     }
 
     pub fn run_pprl_benchmark(&mut self) {

@@ -1,5 +1,7 @@
 # EpiLedger (`epiledger-rs`) — Native Rust Public Health Informatics Workbench
 
+![EpiLedger Headless Workbench](validation/headless_screenshot.png)
+
 100% pure-Rust, local-first public health surveillance, differential-privacy governance, forecast evaluation, privacy-preserving clinical interoperability, environmental biostatistics, sero-epidemiology, antimicrobial resistance (`CLSI M39`), wastewater `SNV` deconvolution, superspreading network analytics, and phylodynamic genomics workbench.
 
 Ships with **three execution interfaces** in a single `epiledger` binary:

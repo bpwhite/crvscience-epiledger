@@ -1,3 +1,18 @@
+// Copyright (C) 2026 CRV Science Network (https://crvscience.com)
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://gnu.org>.
+
 use crate::cartogram::US_CARTOGRAM_CELLS;
 use crate::cli::extract_survey_obs_from_xpt;
 use crate::crc_syndromic_tab::CrcSyndromicWorkbenchState;
@@ -172,7 +187,11 @@ pub struct EpiLedgerGuiApp {
 
 impl EpiLedgerGuiApp {
     pub fn new(cc: &eframe::CreationContext<'_>, db_path: PathBuf) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        Self::new_headless(&cc.egui_ctx, db_path)
+    }
+
+    pub fn new_headless(ctx: &egui::Context, db_path: PathBuf) -> Self {
+        ctx.set_visuals(egui::Visuals::dark());
 
         let mut store = EpiStore::open_file(&db_path)
             .or_else(|_| EpiStore::open_in_memory())
@@ -2118,6 +2137,37 @@ impl EpiLedgerGuiApp {
 
 impl eframe::App for EpiLedgerGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_ui(ctx);
+    }
+}
+
+impl EpiLedgerGuiApp {
+    pub fn configure_screenshot_state(&mut self) {
+        self.configure_screenshot_view(1);
+    }
+
+    pub fn configure_screenshot_view(&mut self, view: u8) {
+        match view {
+            2 => {
+                self.active_tab = ActiveTab::WastewaterAndAmr;
+            }
+            3 => {
+                self.active_tab = ActiveTab::DpAuditAndHpc;
+                self.dp_audit.trigger_dp_release_demo(
+                    &self.store,
+                    &self.active_dataset,
+                    &mut self.status_banner,
+                );
+            }
+            _ => {
+                self.active_tab = ActiveTab::Surveillance;
+                self.window_weeks = 0;
+                self.recompute_analytics();
+            }
+        }
+    }
+
+    pub fn update_ui(&mut self, ctx: &egui::Context) {
         self.poll_worker();
 
         egui::TopBottomPanel::top("top_nav").show(ctx, |ui| {
