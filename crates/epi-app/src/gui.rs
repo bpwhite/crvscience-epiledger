@@ -25,7 +25,7 @@ use crate::scoring_sitrep_tab::ScoringSitrepWorkbenchState;
 use crate::severity_surge_tab::SeveritySurgeWorkbenchState;
 use crate::wastewater_amr_tab::WastewaterAmrWorkbenchState;
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points};
+use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points, VLine};
 use epi_analytics::{
     build_us_state_scan_zones, calibrate_and_project_seir, compute_aberrations, compute_cori_rt,
     compute_disproportionality_2x2, compute_kulldorff_spatial_clusters,
@@ -39,7 +39,7 @@ use epi_core::seed_data::builtin_fda_seed_recalls;
 use epi_core::{
     builtin_measles_weekly_dataset, builtin_pertussis_spatial_records, pathogen_si_presets,
     CellValue, JurisdictionRecord, ReactionFacet, RecallRecord, SuppressionPolicy,
-    TimeSeriesDataset, VintageMetadata,
+    SurveillanceCampaignPreset, TimeSeriesDataset, VintageMetadata,
 };
 use epi_ingest::{
     export_dataset_csv, export_dataset_json, export_timeseries_as_fhir_r4_bundle,
@@ -51,6 +51,66 @@ use epi_store::{BackfillRevisionDelta, EpiStore};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DomainPillar {
+    OutbreakAndRt,
+    SpatialAndSyndromic,
+    GenomicWastewaterLab,
+    ForecastingAuditLedger,
+    ConnectorsAndSurveys,
+}
+
+impl DomainPillar {
+    const ALL: [DomainPillar; 5] = [
+        Self::OutbreakAndRt,
+        Self::SpatialAndSyndromic,
+        Self::GenomicWastewaterLab,
+        Self::ForecastingAuditLedger,
+        Self::ConnectorsAndSurveys,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::OutbreakAndRt => "1. Outbreak & Rt",
+            Self::SpatialAndSyndromic => "2. Spatial & Syndromic",
+            Self::GenomicWastewaterLab => "3. Genomic, Wastewater & Lab",
+            Self::ForecastingAuditLedger => "4. Forecasting, Audit & Ledger",
+            Self::ConnectorsAndSurveys => "5. Connectors & Surveys",
+        }
+    }
+
+    fn sub_tabs(self) -> &'static [(ActiveTab, &'static str)] {
+        match self {
+            Self::OutbreakAndRt => &[
+                (ActiveTab::Surveillance, "Rt & Aberration"),
+                (ActiveTab::SeirNowcast, "SEIR & Delay Nowcast"),
+                (ActiveTab::SuperspreadingNet, "Superspreading & Network"),
+            ],
+            Self::SpatialAndSyndromic => &[
+                (ActiveTab::SpatialScan, "Kulldorff Spatial Scan"),
+                (ActiveTab::CrcAndSyndromic, "Capture-Recapture & ESSENCE"),
+                (ActiveTab::EnvAndMortality, "Env DLNM & EuroMOMO"),
+            ],
+            Self::GenomicWastewaterLab => &[
+                (ActiveTab::GenomicPhylo, "Genomic & Phylodynamics"),
+                (ActiveTab::WastewaterAndAmr, "Wastewater & CLSI AMR"),
+                (ActiveTab::ElrPprlSero, "ELR, PPRL & Sero/VE"),
+            ],
+            Self::ForecastingAuditLedger => &[
+                (ActiveTab::ForecastScoringSitrep, "WIS Scoring & SitRep"),
+                (ActiveTab::SeverityAndSurge, "cCFR & ICU Surge"),
+                (ActiveTab::DpAuditAndHpc, "DP Privacy & Audit"),
+                (ActiveTab::VintageLedger, "Vintage Ledger & Diff"),
+            ],
+            Self::ConnectorsAndSurveys => &[
+                (ActiveTab::LiveConnectors, "Live CDC / Delphi / WHO APIs"),
+                (ActiveTab::LocalImportXpt, "Local CSV / .XPT / FHIR"),
+                (ActiveTab::SurveyAndPrr, "Survey (NHANES) & PRR (FAERS)"),
+            ],
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveTab {
@@ -70,6 +130,59 @@ enum ActiveTab {
     CrcAndSyndromic,
     SeverityAndSurge,
     VintageLedger,
+}
+
+impl ActiveTab {
+    const ALL_SEARCHABLE: [(ActiveTab, &'static str, &'static str); 16] = [
+        (Self::Surveillance, "Rt & Aberration", "cori reproduction aberration farrington ears measles pertussis influenza"),
+        (Self::SeirNowcast, "SEIR & Delay Nowcast", "seir compartment reporting delay nowcast forecast"),
+        (Self::SuperspreadingNet, "Superspreading & Network", "offspring dispersion k mle contact tracing network"),
+        (Self::SpatialScan, "Kulldorff Spatial Scan", "spatial cluster states map fips rr llr"),
+        (Self::CrcAndSyndromic, "Capture-Recapture & ESSENCE", "crc chapman essence syndromic chief complaint"),
+        (Self::EnvAndMortality, "Env DLNM & EuroMOMO", "dlnm wildfire pm2.5 euromomo excess mortality"),
+        (Self::GenomicPhylo, "Genomic & Phylodynamics", "clades variants lineage growth advantage outbreak tree fasta"),
+        (Self::WastewaterAndAmr, "Wastewater & CLSI AMR", "wastewater freyja snv antibiogram clsi m39 mdr xdr"),
+        (Self::ElrPprlSero, "ELR, PPRL & Sero/VE", "hl7 elr pprl bloom filter serosurvey vaccine effectiveness"),
+        (Self::ForecastScoringSitrep, "WIS Scoring & SitRep", "wis interval score ensemble sitrep report"),
+        (Self::SeverityAndSurge, "cCFR & ICU Surge", "cfr case fatality hospital icu ventilator surge"),
+        (Self::DpAuditAndHpc, "DP Privacy & Audit", "differential privacy laplace epsilon budget audit chain"),
+        (Self::VintageLedger, "Vintage Ledger & Diff", "sqlite vintage bitemporal backfill diff"),
+        (Self::LiveConnectors, "Live CDC / Delphi / WHO APIs", "soda nndss nwss delphi openfda who gho"),
+        (Self::LocalImportXpt, "Local CSV / .XPT / FHIR", "csv tsv sas xpt fhir import geojson"),
+        (Self::SurveyAndPrr, "Survey (NHANES) & PRR (FAERS)", "nhanes complex survey taylor faers prr ror ic025"),
+    ];
+
+    fn pillar(self) -> DomainPillar {
+        match self {
+            Self::Surveillance | Self::SeirNowcast | Self::SuperspreadingNet => {
+                DomainPillar::OutbreakAndRt
+            }
+            Self::SpatialScan | Self::CrcAndSyndromic | Self::EnvAndMortality => {
+                DomainPillar::SpatialAndSyndromic
+            }
+            Self::GenomicPhylo | Self::WastewaterAndAmr | Self::ElrPprlSero => {
+                DomainPillar::GenomicWastewaterLab
+            }
+            Self::ForecastScoringSitrep
+            | Self::SeverityAndSurge
+            | Self::DpAuditAndHpc
+            | Self::VintageLedger => DomainPillar::ForecastingAuditLedger,
+            Self::LiveConnectors | Self::LocalImportXpt | Self::SurveyAndPrr => {
+                DomainPillar::ConnectorsAndSurveys
+            }
+        }
+    }
+
+    fn binding_badge(self) -> (bool, &'static str) {
+        match self {
+            Self::SurveyAndPrr => (false, "Auxiliary Sub-Dataset: NHANES / FAERS"),
+            Self::EnvAndMortality => (false, "Auxiliary Sub-Dataset: Env PM2.5 / EuroMOMO"),
+            Self::ElrPprlSero => (false, "Auxiliary Sub-Dataset: ELR / Sero Archive"),
+            Self::LiveConnectors => (false, "Auxiliary Sub-Dataset: Live External Feeds"),
+            Self::LocalImportXpt => (false, "Auxiliary Sub-Dataset: Local File Import"),
+            _ => (true, "Bound to Active Cohort"),
+        }
+    }
 }
 
 enum WorkerMessage {
@@ -94,6 +207,10 @@ pub struct EpiLedgerGuiApp {
     db_path: PathBuf,
     store: EpiStore,
     active_tab: ActiveTab,
+    active_campaign: SurveillanceCampaignPreset,
+    active_window_cutoff_idx: usize,
+    global_search_query: String,
+    focus_global_search: bool,
     status_banner: String,
     suppression_policy: SuppressionPolicy,
 
@@ -247,15 +364,20 @@ impl EpiLedgerGuiApp {
             .map(|v| v.vintage_id.clone())
             .unwrap_or_default();
 
-        Self {
+        let mut app = Self {
             db_path,
             store,
             active_tab: ActiveTab::Surveillance,
-            status_banner: "Loaded 16-tab workbench with Right-Truncated cCFR, Competing-Risk ICU Surge, Capture-Recapture, ESSENCE & Freyja Demixing.".to_string(),
+            active_campaign: SurveillanceCampaignPreset::UsMeasles2022_2026,
+            active_window_cutoff_idx: SurveillanceCampaignPreset::UsMeasles2022_2026
+                .default_active_cutoff_idx(),
+            global_search_query: String::new(),
+            focus_global_search: false,
+            status_banner: "Synchronized 5-Domain Surveillance Workbench ready (Active Cohort: US Measles 2022–2026).".to_string(),
             suppression_policy: SuppressionPolicy::Unmasked,
             active_dataset,
             vintages,
-            window_weeks: 104,
+            window_weeks: 0,
             rt_cfg,
             selected_si_preset: "measles".to_string(),
             ab_cfg,
@@ -270,13 +392,13 @@ impl EpiLedgerGuiApp {
             cached_seir,
             jurisdictions,
             spatial_use_2025: true,
-            selected_fips: "41".to_string(),
+            selected_fips: "48".to_string(),
             cached_clusters,
             max_zone_pop_frac: 0.25,
             cached_zone_clusters,
             highlighted_cluster_members,
             soda_is_nwss: false,
-            soda_condition: "Pertussis".to_string(),
+            soda_condition: "Measles".to_string(),
             soda_jurisdiction: String::new(),
             soda_limit: 600,
             delphi_region: "nat".to_string(),
@@ -316,7 +438,73 @@ impl EpiLedgerGuiApp {
             diff_older_id: first_vid.clone(),
             diff_newer_id: first_vid,
             diff_results: Vec::new(),
+        };
+        app.apply_campaign_preset(SurveillanceCampaignPreset::UsMeasles2022_2026);
+        app
+    }
+
+    fn apply_campaign_preset(&mut self, campaign: SurveillanceCampaignPreset) {
+        self.active_campaign = campaign;
+        let ds = campaign.build_weekly_dataset();
+        let vid = ds.vintage_id.clone();
+        let _ = self.store.commit_vintage(&ds);
+        self.refresh_vintages();
+        self.active_dataset = ds;
+        self.active_window_cutoff_idx = campaign
+            .default_active_cutoff_idx()
+            .min(self.active_dataset.points.len().saturating_sub(1));
+
+        self.selected_si_preset = campaign.si_preset_id().to_string();
+        if let Some(sp) = pathogen_si_presets()
+            .into_iter()
+            .find(|p| p.id == campaign.si_preset_id())
+        {
+            self.rt_cfg.si_mean_days = sp.mean_days;
+            self.rt_cfg.si_sd_days = sp.sd_days;
         }
+        self.seir_preset_id = campaign.si_preset_id().to_string();
+        if let Some(seir_p) = seir_pathogen_presets()
+            .into_iter()
+            .find(|p| p.id == campaign.si_preset_id())
+        {
+            self.seir_cfg.r0 = seir_p.r0_default;
+            self.seir_cfg.latent_days = seir_p.latent_days;
+            self.seir_cfg.infectious_days = seir_p.infectious_days;
+            self.seir_cfg.waning_days = seir_p.waning_days;
+            self.seir_cfg.initial_immune_fraction = seir_p.default_immune_fraction;
+            self.seir_cfg.reporting_fraction = seir_p.reporting_fraction;
+        }
+        self.soda_condition = match campaign {
+            SurveillanceCampaignPreset::UsMeasles2022_2026 => "Measles",
+            SurveillanceCampaignPreset::UsPertussis2022_2026 => "Pertussis",
+            SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => "Influenza",
+            SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => "COVID-19",
+        }
+        .to_string();
+
+        self.jurisdictions = campaign.build_jurisdictions();
+        self.recompute_analytics();
+        self.recompute_spatial();
+        if let Some(top) = self.cached_clusters.first() {
+            self.selected_fips = top.fips.clone();
+        }
+
+        self.genomic.sync_to_campaign(campaign, &self.active_dataset);
+        self.wastewater_amr
+            .sync_to_campaign(campaign, &self.active_dataset);
+        self.severity_surge
+            .sync_to_campaign(campaign, &self.active_dataset, &self.cached_seir);
+        self.crc_syndromic
+            .sync_to_campaign(campaign, &self.active_dataset);
+        self.superspreading_net.sync_to_campaign(campaign);
+        self.dp_audit.refresh_from_store(&self.store, &vid);
+        self.status_banner = format!(
+            "Synchronized Active Cohort '{}': pathogen {}, {} weeks, {} US jurisdictions & all sub-modules.",
+            campaign.label(),
+            campaign.pathogen(),
+            self.active_dataset.points.len(),
+            self.jurisdictions.len()
+        );
     }
 
     fn recompute_analytics(&mut self) {
@@ -481,111 +669,183 @@ impl EpiLedgerGuiApp {
         }
     }
 
-    fn render_top_bar(&mut self, ui: &mut egui::Ui) {
+    fn render_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) {
+            self.focus_global_search = true;
+        }
+
+        // Row 1: 5 Clean Domain Tabs + Global Search & Filter Bar (Ctrl+K)
+        let cur_pillar = self.active_tab.pillar();
         ui.horizontal_wrapped(|ui| {
             ui.heading(
                 RichText::new("EpiLedger")
                     .strong()
                     .color(Color32::from_rgb(96, 165, 250)),
             );
-            ui.label(
-                RichText::new(format!("[{}]", self.active_dataset.source_kind.as_str()))
-                    .monospace()
-                    .color(Color32::from_rgb(52, 211, 153)),
-            );
             ui.separator();
 
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::Surveillance,
-                "1. Rt & Aberration",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::SeirNowcast,
-                "2. SEIR & Nowcast",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::SpatialScan,
-                "3. Multi-Zone Scan",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::LiveConnectors,
-                "4. Live APIs",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::LocalImportXpt,
-                "5. CSV / .XPT / FHIR",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::SurveyAndPrr,
-                "6. Survey & PRR",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::GenomicPhylo,
-                "7. Genomic & Phylo",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::EnvAndMortality,
-                "8. Env & Mortality",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::ElrPprlSero,
-                "9. ELR, PPRL & VE",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::ForecastScoringSitrep,
-                "10. WIS & SitRep",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::DpAuditAndHpc,
-                "11. DP, Audit & HPC",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::SuperspreadingNet,
-                "12. Superspreading & Net",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::WastewaterAndAmr,
-                "13. Wastewater & AMR",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::CrcAndSyndromic,
-                "14. CRC & ESSENCE",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::SeverityAndSurge,
-                "15. Severity & Surge",
-            );
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::VintageLedger,
-                "16. Vintage Ledger",
-            );
+            for pillar in DomainPillar::ALL {
+                let selected = cur_pillar == pillar;
+                if ui
+                    .selectable_label(selected, RichText::new(pillar.label()).strong())
+                    .clicked()
+                {
+                    if cur_pillar != pillar {
+                        if let Some(&(first_tab, _)) = pillar.sub_tabs().first() {
+                            self.active_tab = first_tab;
+                        }
+                    }
+                }
+            }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut mask_bool = self.suppression_policy == SuppressionPolicy::NchsWonderLe9;
-                if ui.checkbox(&mut mask_bool, "NCHS <=9 Mask").changed() {
-                    self.suppression_policy = if mask_bool {
-                        SuppressionPolicy::NchsWonderLe9
-                    } else {
-                        SuppressionPolicy::Unmasked
-                    };
+            ui.separator();
+            ui.label(RichText::new("Search (Ctrl+K):").small().weak());
+            let search_resp = ui.add(
+                egui::TextEdit::singleline(&mut self.global_search_query)
+                    .desired_width(175.0)
+                    .hint_text("Module, state, clade, pathogen..."),
+            );
+            if self.focus_global_search {
+                search_resp.request_focus();
+                self.focus_global_search = false;
+            }
+            if !self.global_search_query.is_empty() && ui.small_button("Clear").clicked() {
+                self.global_search_query.clear();
+            }
+
+            let mut mask_bool = self.suppression_policy == SuppressionPolicy::NchsWonderLe9;
+            if ui.checkbox(&mut mask_bool, "NCHS <=9 Mask").changed() {
+                self.suppression_policy = if mask_bool {
+                    SuppressionPolicy::NchsWonderLe9
+                } else {
+                    SuppressionPolicy::Unmasked
+                };
+            }
+        });
+
+        // Quick matching-module jump strip whenever Ctrl+K Global Search is active
+        let q_low = self.global_search_query.trim().to_ascii_lowercase();
+        if !q_low.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Matching Modules:").small().color(Color32::from_rgb(56, 189, 248)));
+                let mut hits = 0usize;
+                for &(tab, title, tags) in &ActiveTab::ALL_SEARCHABLE {
+                    let hay = format!("{} {} {}", tab.pillar().label(), title, tags).to_ascii_lowercase();
+                    if hay.contains(&q_low) {
+                        hits += 1;
+                        if ui.small_button(format!("-> {title}")).clicked() {
+                            self.active_tab = tab;
+                        }
+                    }
+                }
+                if hits == 0 {
+                    ui.weak("Filtering active table rows (no module title match).");
                 }
             });
+        }
+
+        ui.separator();
+
+        // Row 2: Pinned ActiveSurveillanceHeader (Cohort Selector + Metadata + Binding Badge)
+        let mut next_campaign: Option<SurveillanceCampaignPreset> = None;
+        let active_cutoff_label = self
+            .active_dataset
+            .points
+            .get(self.active_window_cutoff_idx)
+            .map(|p| {
+                let wk = p
+                    .epiweek
+                    .map(|w| w.compact_label())
+                    .unwrap_or_else(|| "w--".to_string());
+                format!("{} ({})", p.date_label, wk)
+            })
+            .unwrap_or_else(|| "Full Range".to_string());
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Active Cohort:").small().strong().color(Color32::from_rgb(148, 163, 184)));
+            egui::ComboBox::from_id_source("active_campaign_combo")
+                .selected_text(self.active_campaign.label())
+                .width(245.0)
+                .show_ui(ui, |ui| {
+                    for preset in SurveillanceCampaignPreset::ALL {
+                        if ui
+                            .selectable_label(self.active_campaign == preset, preset.label())
+                            .clicked()
+                        {
+                            next_campaign = Some(preset);
+                        }
+                    }
+                });
+
+            ui.separator();
+            ui.label(
+                RichText::new(format!(
+                    "Pathogen: {}  |  Region: {}  |  {} · {}",
+                    self.active_campaign.pathogen(),
+                    self.active_campaign.region(),
+                    self.active_campaign.date_span_iso(),
+                    self.active_campaign.mmwr_span_label()
+                ))
+                .small()
+                .monospace(),
+            );
+
+            ui.separator();
+            let (is_bound, badge_txt) = self.active_tab.binding_badge();
+            let (badge_col, badge_bg, prefix) = if is_bound {
+                (
+                    Color32::from_rgb(52, 211, 153),
+                    Color32::from_rgb(6, 78, 59),
+                    "[*] ",
+                )
+            } else {
+                (
+                    Color32::from_rgb(251, 191, 36),
+                    Color32::from_rgb(120, 53, 15),
+                    "[o] ",
+                )
+            };
+            egui::Frame::none()
+                .fill(badge_bg)
+                .rounding(4.0)
+                .inner_margin(egui::Margin::symmetric(7.0, 2.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!("{prefix}{badge_txt}]"))
+                            .small()
+                            .strong()
+                            .color(badge_col),
+                    );
+                });
+        });
+
+        if let Some(c) = next_campaign {
+            if c != self.active_campaign {
+                self.apply_campaign_preset(c);
+            }
+        }
+
+        // Row 3: Sub-View Selector for Current Domain + Dual Time-Window Split Controls
+        let n_pts = self.active_dataset.points.len().max(2);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("View:").small().weak());
+            for &(sub_tab, sub_label) in cur_pillar.sub_tabs() {
+                ui.selectable_value(&mut self.active_tab, sub_tab, sub_label);
+            }
+
+            ui.separator();
+            ui.label(RichText::new("Baseline / Active Cutoff:").small().weak());
+            ui.add(
+                egui::Slider::new(&mut self.active_window_cutoff_idx, 12..=(n_pts - 4))
+                    .show_value(false),
+            );
+            ui.monospace(RichText::new(&active_cutoff_label).small().color(Color32::from_rgb(34, 211, 238)));
+            if ui.small_button("52w Active").clicked() {
+                self.active_window_cutoff_idx = n_pts.saturating_sub(52);
+            }
+            if ui.small_button("26w Active").clicked() {
+                self.active_window_cutoff_idx = n_pts.saturating_sub(26);
+            }
         });
     }
 
@@ -753,10 +1013,27 @@ impl EpiLedgerGuiApp {
 
         ui.add_space(6.0);
 
-        let mut bars = Vec::new();
+        let mut hist_bars = Vec::new();
+        let mut active_bars = Vec::new();
+        let mut alert_bars = Vec::new();
         let mut upper_pts = Vec::new();
         let mut exp_pts = Vec::new();
         let mut alert_pts = Vec::new();
+
+        let cutoff_idx = self
+            .active_window_cutoff_idx
+            .clamp(1, total_pts.saturating_sub(1));
+        let cutoff_x_opt = if cutoff_idx >= start_idx && cutoff_idx < total_pts {
+            Some((cutoff_idx - start_idx) as f64 - 0.5)
+        } else {
+            None
+        };
+        let cutoff_label = self
+            .active_dataset
+            .points
+            .get(cutoff_idx)
+            .map(|p| format!("Active Outbreak Cutoff ({})", p.date_label))
+            .unwrap_or_else(|| "Active Outbreak Cutoff".to_string());
 
         for (offset, idx) in (start_idx..total_pts).enumerate() {
             let x = offset as f64;
@@ -770,12 +1047,26 @@ impl EpiLedgerGuiApp {
                 raw_c
             };
             let ab = &self.cached_ab.points[idx];
-            let fill = if ab.is_alert {
-                Color32::from_rgb(244, 63, 94)
+            if idx < cutoff_idx {
+                let col = if ab.is_alert {
+                    Color32::from_rgba_unmultiplied(148, 163, 184, 210)
+                } else {
+                    Color32::from_rgba_unmultiplied(100, 116, 139, 155)
+                };
+                hist_bars.push(Bar::new(x, disp_c).width(0.74).fill(col));
+            } else if ab.is_alert {
+                alert_bars.push(
+                    Bar::new(x, disp_c)
+                        .width(0.74)
+                        .fill(Color32::from_rgb(244, 63, 94)),
+                );
             } else {
-                Color32::from_rgb(59, 130, 246)
-            };
-            bars.push(Bar::new(x, disp_c).width(0.74).fill(fill));
+                active_bars.push(
+                    Bar::new(x, disp_c)
+                        .width(0.74)
+                        .fill(Color32::from_rgb(34, 211, 238)),
+                );
+            }
 
             if let Some(u) = ab.upper_threshold {
                 upper_pts.push([x, u]);
@@ -783,7 +1074,7 @@ impl EpiLedgerGuiApp {
             if let Some(e) = ab.expected_baseline {
                 exp_pts.push([x, e]);
             }
-            if ab.is_alert {
+            if ab.is_alert && idx >= cutoff_idx {
                 alert_pts.push([x, disp_c]);
             }
         }
@@ -792,7 +1083,11 @@ impl EpiLedgerGuiApp {
             .height(230.0)
             .legend(Legend::default())
             .show(ui, |plot_ui| {
-                plot_ui.bar_chart(BarChart::new(bars).name("Observed Incidence"));
+                plot_ui.bar_chart(BarChart::new(hist_bars).name("Historical Baseline Archive"));
+                plot_ui.bar_chart(BarChart::new(active_bars).name("Current / Active Outbreak Window"));
+                if !alert_bars.is_empty() {
+                    plot_ui.bar_chart(BarChart::new(alert_bars).name("Active Outbreak Alert"));
+                }
                 plot_ui.line(
                     Line::new(PlotPoints::from(exp_pts))
                         .name("Expected Baseline")
@@ -803,23 +1098,43 @@ impl EpiLedgerGuiApp {
                         .name("Upper Prediction Threshold")
                         .color(Color32::from_rgb(245, 158, 11)),
                 );
-                plot_ui.points(
-                    Points::new(PlotPoints::from(alert_pts))
-                        .radius(4.5)
-                        .name("Aberration Alert")
-                        .color(Color32::from_rgb(251, 113, 133)),
-                );
+                if !alert_pts.is_empty() {
+                    plot_ui.points(
+                        Points::new(PlotPoints::from(alert_pts))
+                            .radius(4.5)
+                            .name("Aberration Alert Peak")
+                            .color(Color32::from_rgb(251, 113, 133)),
+                    );
+                }
+                if let Some(cx) = cutoff_x_opt {
+                    plot_ui.vline(
+                        VLine::new(cx)
+                            .name(cutoff_label.clone())
+                            .color(Color32::from_rgb(251, 191, 36))
+                            .width(2.0),
+                    );
+                }
             });
 
         ui.add_space(6.0);
 
+        let mut rt_hist_pts = Vec::new();
         let mut rt_mean_pts = Vec::new();
         let mut rt_low_pts = Vec::new();
         let mut rt_high_pts = Vec::new();
         for (offset, idx) in (start_idx..total_pts).enumerate() {
             if let Some(est) = self.cached_rt.estimates[idx] {
                 let x = offset as f64;
-                rt_mean_pts.push([x, est.mean.min(8.0)]);
+                if idx < cutoff_idx {
+                    rt_hist_pts.push([x, est.mean.min(8.0)]);
+                } else {
+                    if rt_mean_pts.is_empty() && !rt_hist_pts.is_empty() {
+                        if let Some(&prev) = rt_hist_pts.last() {
+                            rt_mean_pts.push(prev);
+                        }
+                    }
+                    rt_mean_pts.push([x, est.mean.min(8.0)]);
+                }
                 rt_low_pts.push([x, est.cri_low_95.min(8.0)]);
                 rt_high_pts.push([x, est.cri_high_95.min(8.0)]);
             }
@@ -836,10 +1151,18 @@ impl EpiLedgerGuiApp {
                         .name("Equilibrium Rt = 1.0")
                         .color(Color32::from_rgb(16, 185, 129)),
                 );
+                if !rt_hist_pts.is_empty() {
+                    plot_ui.line(
+                        Line::new(PlotPoints::from(rt_hist_pts))
+                            .name("Baseline Archive Rt")
+                            .color(Color32::from_rgb(148, 163, 184)),
+                    );
+                }
                 plot_ui.line(
                     Line::new(PlotPoints::from(rt_mean_pts))
-                        .name("Posterior Mean Rt")
-                        .color(Color32::from_rgb(96, 165, 250)),
+                        .name("Active Outbreak Mean Rt")
+                        .color(Color32::from_rgb(34, 211, 238))
+                        .width(2.0),
                 );
                 plot_ui.line(
                     Line::new(PlotPoints::from(rt_high_pts))
@@ -851,6 +1174,14 @@ impl EpiLedgerGuiApp {
                         .name("95% CrI Lower")
                         .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
                 );
+                if let Some(cx) = cutoff_x_opt {
+                    plot_ui.vline(
+                        VLine::new(cx)
+                            .name(cutoff_label.clone())
+                            .color(Color32::from_rgb(251, 191, 36))
+                            .width(2.0),
+                    );
+                }
             });
     }
 
@@ -1434,7 +1765,14 @@ impl EpiLedgerGuiApp {
                             ui.label(RichText::new("RR").strong());
                             ui.label(RichText::new("LLR").strong());
                             ui.end_row();
+                            let row_q = self.global_search_query.trim().to_ascii_lowercase();
                             for c in &self.cached_clusters {
+                                if !row_q.is_empty()
+                                    && !c.name.to_ascii_lowercase().contains(&row_q)
+                                    && !c.fips.to_ascii_lowercase().contains(&row_q)
+                                {
+                                    continue;
+                                }
                                 if ui.link(&c.name).clicked() {
                                     self.selected_fips = c.fips.clone();
                                 }
@@ -2052,7 +2390,15 @@ impl EpiLedgerGuiApp {
                 ui.heading("SQLite WAL Bitemporal Vintage Ledger");
                 let mut load_id: Option<String> = None;
                 egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                    let vq = self.global_search_query.trim().to_ascii_lowercase();
                     for v in &self.vintages {
+                        if !vq.is_empty()
+                            && !v.title.to_ascii_lowercase().contains(&vq)
+                            && !v.vintage_id.to_ascii_lowercase().contains(&vq)
+                            && !v.source_kind.to_ascii_lowercase().contains(&vq)
+                        {
+                            continue;
+                        }
                         let is_cur = v.vintage_id == self.active_dataset.vintage_id;
                         ui.group(|ui| {
                             ui.horizontal(|ui| {
@@ -2142,16 +2488,16 @@ impl eframe::App for EpiLedgerGuiApp {
 }
 
 impl EpiLedgerGuiApp {
-    pub fn configure_screenshot_state(&mut self) {
-        self.configure_screenshot_view(1);
-    }
-
     pub fn configure_screenshot_view(&mut self, view: u8) {
         match view {
             2 => {
+                self.apply_campaign_preset(
+                    SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026,
+                );
                 self.active_tab = ActiveTab::WastewaterAndAmr;
             }
             3 => {
+                self.apply_campaign_preset(SurveillanceCampaignPreset::UsPertussis2022_2026);
                 self.active_tab = ActiveTab::DpAuditAndHpc;
                 self.dp_audit.trigger_dp_release_demo(
                     &self.store,
@@ -2160,6 +2506,7 @@ impl EpiLedgerGuiApp {
                 );
             }
             _ => {
+                self.apply_campaign_preset(SurveillanceCampaignPreset::UsMeasles2022_2026);
                 self.active_tab = ActiveTab::Surveillance;
                 self.window_weeks = 0;
                 self.recompute_analytics();
@@ -2171,7 +2518,7 @@ impl EpiLedgerGuiApp {
         self.poll_worker();
 
         egui::TopBottomPanel::top("top_nav").show(ctx, |ui| {
-            self.render_top_bar(ui);
+            self.render_top_bar(ui, ctx);
         });
 
         egui::TopBottomPanel::bottom("bottom_status").show(ctx, |ui| {
@@ -2191,7 +2538,10 @@ impl EpiLedgerGuiApp {
                 ActiveTab::LiveConnectors => self.render_live_connectors_tab(ui, ctx),
                 ActiveTab::LocalImportXpt => self.render_local_import_tab(ui),
                 ActiveTab::SurveyAndPrr => self.render_survey_and_prr_tab(ui),
-                ActiveTab::GenomicPhylo => self.genomic.render(ui, &mut self.status_banner),
+                ActiveTab::GenomicPhylo => {
+                    self.genomic
+                        .render_with_filter(ui, &mut self.status_banner, &self.global_search_query);
+                }
                 ActiveTab::EnvAndMortality => self.env_mortality.render(ui, &mut self.status_banner),
                 ActiveTab::ElrPprlSero => {
                     let act = self.elr_pprl_sero.render(ui, &mut self.status_banner);
@@ -2258,7 +2608,11 @@ impl EpiLedgerGuiApp {
                     }
                 }
                 ActiveTab::WastewaterAndAmr => {
-                    let act = self.wastewater_amr.render(ui, &mut self.status_banner);
+                    let act = self.wastewater_amr.render_with_filter(
+                        ui,
+                        &mut self.status_banner,
+                        &self.global_search_query,
+                    );
                     if let Some(lin_tbl) = act.push_wastewater_to_genomic {
                         let n_wks = lin_tbl.rows.len();
                         let n_clades = lin_tbl.clade_names.len();
@@ -2291,5 +2645,35 @@ impl EpiLedgerGuiApp {
                 ActiveTab::VintageLedger => self.render_vintage_ledger_tab(ui),
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn campaign_preset_synchronizes_all_modules_and_5_domain_tabs_render() {
+        let ctx = egui::Context::default();
+        let mut app = EpiLedgerGuiApp::new_headless(&ctx, PathBuf::from(":memory:"));
+
+        for preset in SurveillanceCampaignPreset::ALL {
+            app.apply_campaign_preset(preset);
+            assert_eq!(app.active_campaign, preset);
+            assert_eq!(app.active_dataset.default_si_preset, preset.si_preset_id());
+            assert_eq!(app.jurisdictions.len(), 51);
+            assert!(!app.wastewater_amr.ww_result.samples.is_empty());
+            assert!(app.genomic.cached_lineage.is_some());
+        }
+
+        app.global_search_query = "TX".to_string();
+        for pillar in DomainPillar::ALL {
+            if let Some(&(first_tab, _)) = pillar.sub_tabs().first() {
+                app.active_tab = first_tab;
+                let _ = ctx.run(egui::RawInput::default(), |c| {
+                    app.update_ui(c);
+                });
+            }
+        }
     }
 }

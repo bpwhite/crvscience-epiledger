@@ -21,6 +21,7 @@ use epi_analytics::{
     BipartiteNetworkAnalysis, ContactTracingRecord, OffspringDispersionResult, OffspringFitConfig,
     ZeroTruncationMode,
 };
+use epi_core::SurveillanceCampaignPreset;
 
 #[derive(Default)]
 pub struct Phase9GuiAction {
@@ -101,6 +102,44 @@ impl SuperspreadingWorkbenchState {
         self.active_offspring = fit;
         self.using_custom_counts = true;
         Ok(())
+    }
+
+    pub fn sync_to_campaign(&mut self, campaign: SurveillanceCampaignPreset) {
+        let mut recs = builtin_superspreading_outbreak_records();
+        for r in &mut recs {
+            match campaign {
+                SurveillanceCampaignPreset::UsMeasles2022_2026 => {
+                    if r.venue_category == "Indoor Choir" {
+                        r.venue_category = "Unvaccinated School Pod".to_string();
+                        r.venue_id = "VEN-MEV-SCHOOL-01".to_string();
+                    } else if r.venue_category == "Shift Workplace" {
+                        r.venue_category = "Pediatric Clinic Waiting Room".to_string();
+                        r.venue_id = "VEN-MEV-CLINIC-02".to_string();
+                    }
+                }
+                SurveillanceCampaignPreset::UsPertussis2022_2026 => {
+                    if r.venue_category == "Indoor Choir" {
+                        r.venue_category = "High School Band / Choir".to_string();
+                        r.venue_id = "VEN-BP-SCHOOL-01".to_string();
+                    } else if r.venue_category == "Shift Workplace" {
+                        r.venue_category = "Early Childhood Daycare".to_string();
+                        r.venue_id = "VEN-BP-DAYCARE-02".to_string();
+                    }
+                }
+                SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => {
+                    if r.venue_category == "Indoor Choir" {
+                        r.venue_category = "Long-Term Care Dining Hall".to_string();
+                        r.venue_id = "VEN-FLU-LTC-01".to_string();
+                    } else if r.venue_category == "Shift Workplace" {
+                        r.venue_category = "Indoor Winter Transit Hub".to_string();
+                        r.venue_id = "VEN-FLU-TRANSIT-02".to_string();
+                    }
+                }
+                SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => {}
+            }
+        }
+        self.records = recs;
+        let _ = self.recompute_network();
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, status_banner: &mut String) -> Phase9GuiAction {

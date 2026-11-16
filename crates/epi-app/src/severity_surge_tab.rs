@@ -21,6 +21,7 @@ use epi_analytics::{
     project_hospital_surge_from_seir, CaseDeathObservation, DelayAdjustedCfrResult,
     DelayCfrConfig, HospitalSurgeConfig, HospitalSurgeResult, SeirForecastResult,
 };
+use epi_core::{SurveillanceCampaignPreset, TimeSeriesDataset};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase12SubView {
@@ -108,6 +109,40 @@ impl SeveritySurgeWorkbenchState {
                     .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    pub fn sync_to_campaign(
+        &mut self,
+        campaign: SurveillanceCampaignPreset,
+        active_ds: &TimeSeriesDataset,
+        active_seir: &SeirForecastResult,
+    ) {
+        let base_wave = builtin_emerging_wave_cases_and_deaths();
+        let active_tail_mean = active_ds
+            .points
+            .iter()
+            .rev()
+            .take(12)
+            .map(|p| p.count)
+            .sum::<f64>()
+            / 12.0;
+        let (case_scale, death_scale) = match campaign {
+            SurveillanceCampaignPreset::UsMeasles2022_2026 => ((active_tail_mean / 300.0).clamp(0.25, 2.0), 0.14),
+            SurveillanceCampaignPreset::UsPertussis2022_2026 => ((active_tail_mean / 400.0).clamp(0.30, 2.5), 0.22),
+            SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => (1.8, 0.45),
+            SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => (1.0, 1.0),
+        };
+        self.cfr_series = base_wave
+            .into_iter()
+            .map(|mut obs| {
+                obs.incident_cases = (obs.incident_cases * case_scale).max(4.0).round();
+                obs.incident_deaths = (obs.incident_deaths * case_scale * death_scale * 10.0).round() / 10.0;
+                obs
+            })
+            .collect();
+        self.drive_from_active_seir = true;
+        let _ = self.recompute_cfr();
+        let _ = self.recompute_surge(active_seir);
     }
 
     pub fn render(

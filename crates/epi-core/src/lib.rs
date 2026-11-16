@@ -25,5 +25,5 @@ pub use schema::{
 };
 pub use seed_data::{
     builtin_measles_weekly_dataset, builtin_pertussis_spatial_records, pathogen_si_presets,
-    us_2000_standard_population_weights,
+    us_2000_standard_population_weights, SurveillanceCampaignPreset,
 };

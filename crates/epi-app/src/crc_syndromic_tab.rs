@@ -20,7 +20,7 @@ use epi_analytics::{
     fit_three_source_loglinear_crc, parse_crc_case_lists_csv, ThreeSourceCrcAnalysis,
     ThreeSourceOverlapCounts, TwoSourceChapmanResult,
 };
-use epi_core::TimeSeriesDataset;
+use epi_core::{SurveillanceCampaignPreset, TimeSeriesDataset};
 use epi_ingest::{
     build_syndrome_weekly_dataset, builtin_ed_chief_complaint_encounters,
     classify_ed_encounters_essence, parse_ed_encounters_csv, EdTriageEncounter,
@@ -138,6 +138,79 @@ impl CrcSyndromicWorkbenchState {
             &self.custom_essence_query,
             self.neg_window_tokens,
         );
+    }
+
+    pub fn sync_to_campaign(
+        &mut self,
+        campaign: SurveillanceCampaignPreset,
+        active_ds: &TimeSeriesDataset,
+    ) {
+        let base = builtin_three_source_tb_pertussis_crc();
+        let recent_mean = active_ds
+            .points
+            .iter()
+            .rev()
+            .take(8)
+            .map(|p| p.count)
+            .sum::<f64>()
+            / 8.0;
+        let scale = (recent_mean / 220.0).clamp(0.45, 4.0);
+        self.crc_counts = match campaign {
+            SurveillanceCampaignPreset::UsPertussis2022_2026 => base,
+            SurveillanceCampaignPreset::UsMeasles2022_2026 => ThreeSourceOverlapCounts {
+                s1_name: "Measles PCR/IgM Lab".to_string(),
+                s2_name: "ED Rash/Fever Discharge".to_string(),
+                s3_name: "NNDSS Case Report".to_string(),
+                n_100: ((base.n_100 as f64) * scale).round() as u64,
+                n_010: ((base.n_010 as f64) * scale).round() as u64,
+                n_001: ((base.n_001 as f64) * scale).round() as u64,
+                n_110: ((base.n_110 as f64) * scale).round() as u64,
+                n_101: ((base.n_101 as f64) * scale).round() as u64,
+                n_011: ((base.n_011 as f64) * scale).round() as u64,
+                n_111: ((base.n_111 as f64) * scale).round() as u64,
+            },
+            SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => ThreeSourceOverlapCounts {
+                s1_name: "State Virology Lab".to_string(),
+                s2_name: "ILINet Inpatient".to_string(),
+                s3_name: "ESSENCE Respiratory".to_string(),
+                n_100: ((base.n_100 as f64) * 2.2).round() as u64,
+                n_010: ((base.n_010 as f64) * 2.2).round() as u64,
+                n_001: ((base.n_001 as f64) * 2.2).round() as u64,
+                n_110: ((base.n_110 as f64) * 2.2).round() as u64,
+                n_101: ((base.n_101 as f64) * 2.2).round() as u64,
+                n_011: ((base.n_011 as f64) * 2.2).round() as u64,
+                n_111: ((base.n_111 as f64) * 2.2).round() as u64,
+            },
+            SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => ThreeSourceOverlapCounts {
+                s1_name: "ELR Nucleic Acid Test".to_string(),
+                s2_name: "NHSN Admission".to_string(),
+                s3_name: "ED COVID-Like Visit".to_string(),
+                n_100: ((base.n_100 as f64) * 1.9).round() as u64,
+                n_010: ((base.n_010 as f64) * 1.9).round() as u64,
+                n_001: ((base.n_001 as f64) * 1.9).round() as u64,
+                n_110: ((base.n_110 as f64) * 1.9).round() as u64,
+                n_101: ((base.n_101 as f64) * 1.9).round() as u64,
+                n_011: ((base.n_011 as f64) * 1.9).round() as u64,
+                n_111: ((base.n_111 as f64) * 1.9).round() as u64,
+            },
+        };
+        self.custom_essence_query = match campaign {
+            SurveillanceCampaignPreset::UsMeasles2022_2026 => {
+                "(^fever^ OR ^rash^ OR ^measles^ OR ^b05^) ANDNOT (^immunization^ OR ^vaccine^)"
+            }
+            SurveillanceCampaignPreset::UsPertussis2022_2026 => {
+                "(^cough^ OR ^pertussis^ OR ^whooping^ OR ^a37^) ANDNOT (^immunization^ OR ^vaccine^)"
+            }
+            SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => {
+                "(^fever^ OR ^cough^ OR ^j10^ OR ^influenza^) ANDNOT (^immunization^ OR ^heat pack^)"
+            }
+            SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => {
+                "(^fever^ OR ^cough^ OR ^covid^ OR ^u07^) ANDNOT (^immunization^ OR ^negative^)"
+            }
+        }
+        .to_string();
+        let _ = self.recompute_crc();
+        self.recompute_essence();
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, status_banner: &mut String) -> Phase11GuiAction {

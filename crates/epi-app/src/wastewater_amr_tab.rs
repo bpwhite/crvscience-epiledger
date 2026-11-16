@@ -22,6 +22,7 @@ use epi_analytics::{
     CumulativeAntibiogramResult, DepthWeighting, IsolateDeduplicationPolicy, LineageCountTable,
     LongitudinalWastewaterResult, WastewaterDemixConfig, WastewaterSampleInput,
 };
+use epi_core::{SurveillanceCampaignPreset, TimeSeriesDataset};
 
 const LINEAGE_COLORS: [Color32; 6] = [
     Color32::from_rgb(56, 189, 248),
@@ -117,7 +118,77 @@ impl WastewaterAmrWorkbenchState {
         Ok(())
     }
 
+    pub fn sync_to_campaign(
+        &mut self,
+        campaign: SurveillanceCampaignPreset,
+        active_ds: &TimeSeriesDataset,
+    ) {
+        let (mut lib, mut smps) = builtin_wastewater_barcode_and_samples();
+        let (lin_names, sewershed, load_scale) = match campaign {
+            SurveillanceCampaignPreset::UsMeasles2022_2026 => (
+                vec![
+                    "MeV-B3.1".to_string(),
+                    "MeV-D8-TX".to_string(),
+                    "MeV-D8-OH".to_string(),
+                    "MeV-D8-Import".to_string(),
+                ],
+                "South-Plains-Sentinel-WRF",
+                0.18,
+            ),
+            SurveillanceCampaignPreset::UsPertussis2022_2026 => (
+                vec![
+                    "Bp-ptxP3".to_string(),
+                    "Bp-PRN-del".to_string(),
+                    "Bp-fhaB2".to_string(),
+                    "Bp-MacRes".to_string(),
+                ],
+                "Great-Lakes-Municipal-WRF",
+                0.35,
+            ),
+            SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => (
+                vec![
+                    "IAV-H1N1pdm09".to_string(),
+                    "IAV-H3N2-2a3a1".to_string(),
+                    "IAV-H3N2-J2".to_string(),
+                    "IBV-Victoria".to_string(),
+                ],
+                "US-NWSS-ILINet-Sewershed",
+                0.85,
+            ),
+            SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => (
+                lib.lineage_names.clone(),
+                "Corvallis-Willamette-WRF",
+                1.0,
+            ),
+        };
+        lib.lineage_names = lin_names;
+        let tail_start = active_ds.points.len().saturating_sub(smps.len());
+        let tail = &active_ds.points[tail_start..];
+        for (i, s) in smps.iter_mut().enumerate() {
+            s.sewershed = sewershed.to_string();
+            s.viral_copies_per_liter = (s.viral_copies_per_liter * load_scale).max(1.2e3);
+            if let Some(pt) = tail.get(i) {
+                s.date_label = pt
+                    .epiweek
+                    .map(|w| w.compact_label())
+                    .unwrap_or_else(|| pt.date_label.clone());
+            }
+        }
+        self.ww_library = lib;
+        self.ww_samples = smps;
+        let _ = self.recompute_wastewater();
+    }
+
     pub fn render(&mut self, ui: &mut egui::Ui, status_banner: &mut String) -> Phase10GuiAction {
+        self.render_with_filter(ui, status_banner, "")
+    }
+
+    pub fn render_with_filter(
+        &mut self,
+        ui: &mut egui::Ui,
+        status_banner: &mut String,
+        search_filter: &str,
+    ) -> Phase10GuiAction {
         let mut action = Phase10GuiAction::default();
 
         ui.horizontal_wrapped(|ui| {
@@ -138,9 +209,11 @@ impl WastewaterAmrWorkbenchState {
 
         match self.sub_view {
             Phase10SubView::WastewaterFreyjaDemix => {
-                self.render_wastewater_panel(ui, status_banner, &mut action)
+                self.render_wastewater_panel(ui, status_banner, &mut action, search_filter)
             }
-            Phase10SubView::ClsiM39Antibiogram => self.render_antibiogram_panel(ui, status_banner),
+            Phase10SubView::ClsiM39Antibiogram => {
+                self.render_antibiogram_panel(ui, status_banner, search_filter)
+            }
         }
 
         action
@@ -151,6 +224,7 @@ impl WastewaterAmrWorkbenchState {
         ui: &mut egui::Ui,
         status_banner: &mut String,
         action: &mut Phase10GuiAction,
+        search_filter: &str,
     ) {
         let latest = self
             .ww_result
@@ -500,6 +574,7 @@ impl WastewaterAmrWorkbenchState {
                                     ui.strong("Cryptic Flags");
                                     ui.end_row();
 
+                                    let q = search_filter.trim().to_ascii_lowercase();
                                     for s in &self.ww_result.samples {
                                         let top = s
                                             .lineages
@@ -513,6 +588,13 @@ impl WastewaterAmrWorkbenchState {
                                                 format!("{} ({:.0}%)", l.lineage, l.abundance * 100.0)
                                             })
                                             .unwrap_or_default();
+                                        if !q.is_empty()
+                                            && !s.sample_id.to_ascii_lowercase().contains(&q)
+                                            && !s.date_label.to_ascii_lowercase().contains(&q)
+                                            && !top.to_ascii_lowercase().contains(&q)
+                                        {
+                                            continue;
+                                        }
                                         ui.monospace(&s.sample_id);
                                         ui.monospace(&s.date_label);
                                         ui.monospace(format!("{:.4}", s.weighted_l1_loss));
@@ -527,7 +609,12 @@ impl WastewaterAmrWorkbenchState {
         }
     }
 
-    fn render_antibiogram_panel(&mut self, ui: &mut egui::Ui, status_banner: &mut String) {
+    fn render_antibiogram_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        status_banner: &mut String,
+        search_filter: &str,
+    ) {
         let ab = &self.amr_result;
         let low_n_orgs = ab
             .organism_summaries
@@ -865,7 +952,16 @@ impl WastewaterAmrWorkbenchState {
                             ui.strong("Guidance Flag");
                             ui.end_row();
 
+                            let q = search_filter.trim().to_ascii_lowercase();
                             for c in &self.amr_result.cells {
+                                if !q.is_empty()
+                                    && !c.organism.to_ascii_lowercase().contains(&q)
+                                    && !c.drug_code.to_ascii_lowercase().contains(&q)
+                                    && !c.drug_name.to_ascii_lowercase().contains(&q)
+                                    && !c.drug_class.to_ascii_lowercase().contains(&q)
+                                {
+                                    continue;
+                                }
                                 ui.monospace(&c.organism);
                                 ui.monospace(format!("{} ({})", c.drug_code, c.drug_name));
                                 ui.label(&c.drug_class);

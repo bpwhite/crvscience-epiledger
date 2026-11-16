@@ -22,6 +22,7 @@ use epi_analytics::{
     LineageLogisticsConfig, LineageLogisticsResult, OutbreakIsolateInput, OutbreakTreeConfig,
     OutbreakTreeResult,
 };
+use epi_core::{SurveillanceCampaignPreset, TimeSeriesDataset};
 use std::collections::HashMap;
 
 const CLADE_PALETTE: [Color32; 8] = [
@@ -105,15 +106,88 @@ impl GenomicWorkbenchState {
         }
     }
 
+    pub fn sync_to_campaign(
+        &mut self,
+        campaign: SurveillanceCampaignPreset,
+        active_ds: &TimeSeriesDataset,
+    ) {
+        let mut table = builtin_respiratory_lineage_table();
+        let tail_start = active_ds.points.len().saturating_sub(20);
+        let tail = &active_ds.points[tail_start..];
+        let mut new_clades = match campaign {
+            SurveillanceCampaignPreset::UsMeasles2022_2026 => Some((
+                "US Measles Genotype N-450 Clade Cohort (Recent 20w)".to_string(),
+                vec![
+                    "B3.1 (Ref)".to_string(),
+                    "D8-MVs/TX.25".to_string(),
+                    "D8-MVs/OH.26".to_string(),
+                    "D8-Global".to_string(),
+                    "B3-Import".to_string(),
+                ],
+            )),
+            SurveillanceCampaignPreset::UsPertussis2022_2026 => Some((
+                "US Bordetella pertussis Allelic & PRN-Deficient Clades (Recent 20w)".to_string(),
+                vec![
+                    "ptxP3/PRN+".to_string(),
+                    "ptxP3/PRN-del".to_string(),
+                    "fhaB-2400".to_string(),
+                    "23S-A2047G".to_string(),
+                    "ptxA1-Minor".to_string(),
+                ],
+            )),
+            SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026 => Some((
+                "US Influenza Type/Subclade Genomic Cohort (Recent 20w)".to_string(),
+                vec![
+                    "A(H1N1)pdm09 6B.1A".to_string(),
+                    "A(H3N2) 2a.3a.1".to_string(),
+                    "A(H3N2) J.2".to_string(),
+                    "B/Victoria V1A.3a.2".to_string(),
+                    "A(H1N1) 5a.2a.1".to_string(),
+                ],
+            )),
+            SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026 => None,
+        };
+        if let Some((title, clade_names)) = new_clades.take() {
+            table.title = title;
+            table.clade_names = clade_names;
+            if tail.len() == table.rows.len() {
+                for (r, pt) in table.rows.iter_mut().zip(tail.iter()) {
+                    r.period_label = pt
+                        .epiweek
+                        .map(|w| w.compact_label())
+                        .unwrap_or_else(|| pt.date_label.clone());
+                    r.total_cases = pt.count.max(12.0);
+                }
+            }
+        }
+        self.lineage_table = table;
+        self.lineage_cfg.reference_clade_index = 0;
+        let _ = self.recompute_lineage();
+    }
+
     pub fn render(&mut self, ui: &mut egui::Ui, status_banner: &mut String) {
-        self.render_lineage_section(ui, status_banner);
+        self.render_with_filter(ui, status_banner, "");
+    }
+
+    pub fn render_with_filter(
+        &mut self,
+        ui: &mut egui::Ui,
+        status_banner: &mut String,
+        search_filter: &str,
+    ) {
+        self.render_lineage_section(ui, status_banner, search_filter);
         ui.add_space(12.0);
         ui.separator();
         ui.add_space(8.0);
         self.render_outbreak_tree_section(ui, status_banner);
     }
 
-    fn render_lineage_section(&mut self, ui: &mut egui::Ui, status_banner: &mut String) {
+    fn render_lineage_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        status_banner: &mut String,
+        search_filter: &str,
+    ) {
         ui.heading("Multinomial Lineage Competition, Spline Dynamics & Variant-Specific Rt");
         ui.label(
             RichText::new(
@@ -434,7 +508,11 @@ impl GenomicWorkbenchState {
                         ui.strong("Latest Variant Rt");
                         ui.end_row();
 
+                        let q = search_filter.trim().to_ascii_lowercase();
                         for c in &res.clade_summaries {
+                            if !q.is_empty() && !c.clade_name.to_ascii_lowercase().contains(&q) {
+                                continue;
+                            }
                             ui.monospace(&c.clade_name);
                             ui.monospace(format!("{:.0}", c.total_sequences));
                             ui.monospace(format!("{:.1}%", c.latest_observed_share * 100.0));
