@@ -8,9 +8,7 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.24222382"
     description: "Zenodo Concept DOI for CRV Science Apps Preprint APP-PREPRINT-06"
-license:
-  - MIT
-  - Apache-2.0
+license: "GPL-3.0-or-later"
 repository-code: "https://github.com/bpwhite/crvscience-epiledger"
 url: "https://crvscience.com/apps"
 authors:
