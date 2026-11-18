@@ -228,6 +228,14 @@ impl EnvMortalityWorkbenchState {
                         .desired_width(220.0)
                         .hint_text("date,exposure,outcome[,confounder]"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.dlnm_csv_path = p.display().to_string();
+                    }
+                }
                 ui.label("Unit:");
                 ui.add(egui::TextEdit::singleline(&mut self.dlnm_unit_input).desired_width(100.0));
                 if ui.button("Load Exposure CSV").clicked() {
@@ -613,6 +621,14 @@ impl EnvMortalityWorkbenchState {
                         .desired_width(260.0)
                         .hint_text("week,iso_week,deaths[,population,mean_age]"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.mort_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Load Mortality CSV").clicked() {
                     let p = self.mort_csv_path.trim().to_string();
                     match std::fs::read_to_string(&p)

@@ -402,6 +402,14 @@ impl CrcSyndromicWorkbenchState {
                         .desired_width(205.0)
                         .hint_text("path/to/crc_case_lists.csv"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.crc_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Import CRC CSV").clicked() {
                     match std::fs::read_to_string(self.crc_csv_path.trim()) {
                         Ok(raw) => match parse_crc_case_lists_csv(&raw, "Lab", "Hospital", "Vital")
@@ -677,6 +685,14 @@ impl CrcSyndromicWorkbenchState {
                         .desired_width(230.0)
                         .hint_text("path/to/ed_chief_complaints.csv"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.ed_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Import ED Triage CSV").clicked() {
                     match std::fs::read_to_string(self.ed_csv_path.trim()) {
                         Ok(raw) => match parse_ed_encounters_csv(&raw) {

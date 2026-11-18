@@ -24,7 +24,7 @@ pub mod sas_xport;
 pub mod syndromic_essence;
 pub mod who_gho;
 
-pub use cdc_soda::{CdcSodaClient, SodaDatasetKind, SodaFetchOutcome};
+pub use cdc_soda::{escape_soql_literal, CdcSodaClient, SodaDatasetKind, SodaFetchOutcome, SodaQuerySpec};
 pub use cmu_delphi::CmuDelphiClient;
 pub use fhir_r4::{
     export_timeseries_as_fhir_r4_bundle, import_fhir_r4_bundle_file, parse_fhir_r4_bundle_str,
@@ -46,7 +46,8 @@ pub use sas_xport::{parse_sas_xport_bytes, SasVariableMeta, SasXportDataset, Sas
 pub use syndromic_essence::{
     build_syndrome_weekly_dataset, builtin_ed_chief_complaint_encounters,
     classify_ed_encounters_essence, evaluate_custom_essence_query, match_affirmative_or_negated,
-    normalize_chief_complaint, parse_ed_encounters_csv, ClassifiedEdEncounter, EdTriageEncounter,
-    EssenceBatchClassification, EssenceSyndromeId, SyndromeSummaryRow,
+    normalize_chief_complaint, parse_ed_encounters_csv, parse_essence_query, ClassifiedEdEncounter,
+    EdTriageEncounter, EssenceBatchClassification, EssenceQueryAst, EssenceSyndromeId,
+    SyndromeSummaryRow,
 };
 pub use who_gho::WhoGhoClient;

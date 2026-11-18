@@ -16,6 +16,10 @@
 use crate::math::{gamma_pdf, gamma_quantile};
 use serde::{Deserialize, Serialize};
 
+/// Minimum sliding-window incident cases required by Cori et al. (2013, *Am J Epidemiol*
+/// / *EpiEstim*) to keep the posterior coefficient of variation CV <= 0.30 (`>= 12` cases).
+pub const CORI_MIN_WINDOW_CASES: f64 = 12.0;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CoriRtConfig {
     pub si_mean_days: f64,
@@ -128,7 +132,7 @@ pub fn compute_cori_rt(weekly_counts: &[f64], cfg: &CoriRtConfig) -> CoriRtSerie
                 sum_i += weekly_counts[u].max(0.0);
                 sum_l += lambda[u];
             }
-            if sum_l > 0.05 {
+            if sum_l > 0.05 && sum_i + 1e-9 >= CORI_MIN_WINDOW_CASES {
                 let a_post = cfg.prior_a + sum_i;
                 let b_post = (1.0 / cfg.prior_b) + sum_l;
                 estimates[t] = Some(CoriRtEstimate {
@@ -198,7 +202,7 @@ pub fn compute_cori_rt(weekly_counts: &[f64], cfg: &CoriRtConfig) -> CoriRtSerie
             let start_d = end_d.saturating_sub(tau_days - 1).max(1);
             let sum_i: f64 = daily[start_d..=end_d].iter().sum();
             let sum_l: f64 = lambda_day[start_d..=end_d].iter().sum();
-            if sum_l > 0.05 {
+            if sum_l > 0.05 && sum_i + 1e-9 >= CORI_MIN_WINDOW_CASES {
                 let a_post = cfg.prior_a + sum_i;
                 let b_post = (1.0 / cfg.prior_b) + sum_l;
                 estimates[wk] = Some(CoriRtEstimate {
@@ -242,5 +246,54 @@ mod tests {
         let res_down = compute_cori_rt(&shrinking, &cfg);
         let last_down = res_down.estimates.last().unwrap().unwrap();
         assert!(last_down.mean < 0.8);
+    }
+
+    #[test]
+    fn test_cori_rt_gates_below_12_cases_weekly() {
+        let cfg = CoriRtConfig {
+            si_mean_days: 11.7,
+            si_sd_days: 2.0,
+            tau_weeks: 3,
+            prior_a: 1.0,
+            prior_b: 5.0,
+        };
+        // Window sums: [1..=3] = 2+4+5 = 11 (<12 => None), [2..=4] = 4+5+3 = 12 (>=12 => Some)
+        let counts = vec![5.0, 2.0, 4.0, 5.0, 3.0];
+        let res = compute_cori_rt(&counts, &cfg);
+        assert!(res.estimates[3].is_none(), "sum_i=11 must be gated");
+        assert!(res.estimates[4].is_some(), "sum_i=12 must be emitted");
+    }
+
+    #[test]
+    fn test_cori_rt_gates_below_12_cases_daily_em() {
+        let cfg = CoriRtConfig {
+            si_mean_days: 4.2,
+            si_sd_days: 1.9,
+            tau_weeks: 2,
+            prior_a: 1.0,
+            prior_b: 5.0,
+        };
+        assert!(cfg.si_mean_days < 7.0);
+        // Week 2 sum: 5 + 6 = 11 (<12 => None); Week 3 sum: 6 + 6 = 12 (>=12 => Some)
+        let counts = vec![4.0, 5.0, 6.0, 6.0];
+        let res = compute_cori_rt(&counts, &cfg);
+        assert!(res.used_daily_em_disaggregation);
+        assert!(res.estimates[2].is_none(), "daily-EM sum_i=11 must be gated");
+        assert!(res.estimates[3].is_some(), "daily-EM exact sum_i=12 must pass");
+    }
+
+    #[test]
+    fn test_cori_rt_mid_series_trough_gated_and_reemerges() {
+        let cfg = CoriRtConfig::default();
+        let counts = vec![
+            10.0, 14.0, 18.0, 20.0, // wave 1 (>=12)
+            1.0, 1.0, 0.0, 1.0, 1.0, // quiet trough (<12)
+            8.0, 10.0, 16.0, 24.0, // wave 2 (>=12)
+        ];
+        let res = compute_cori_rt(&counts, &cfg);
+        assert!(res.estimates[3].is_some());
+        assert!(res.estimates[7].is_none());
+        assert!(res.estimates[8].is_none());
+        assert!(res.estimates[12].is_some());
     }
 }

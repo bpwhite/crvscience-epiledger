@@ -48,10 +48,10 @@
   },
   "t3_cori_rt_and_wastewater": {
     "measles_weeks_total": 253,
-    "measles_rt_valid_weeks": 232,
-    "measles_rt_peak_mean": 10.267606029720879,
-    "measles_rt_peak_cri_low_95": 3.3338637296699862,
-    "measles_rt_peak_cri_high_95": 21.03131952749922,
+    "measles_rt_valid_weeks": 129,
+    "measles_rt_peak_mean": 4.717874389684814,
+    "measles_rt_peak_cri_low_95": 3.227022590040765,
+    "measles_rt_peak_cri_high_95": 6.487375912987896,
     "measles_rt_terminal_mean": 0.7163787740473959,
     "measles_rt_all_intervals_ordered": true,
     "respiratory_ili_weeks": 8,
@@ -76,6 +76,6 @@
       "S:S31del"
     ],
     "csv_output_path": "validation/cori_rt_and_dp_audit.csv",
-    "csv_bytes": 16613
+    "csv_bytes": 14957
   }
 }

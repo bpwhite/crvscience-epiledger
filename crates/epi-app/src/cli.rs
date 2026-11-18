@@ -113,7 +113,72 @@ pub fn extract_survey_obs_from_xpt(
     Ok(obs)
 }
 
+pub fn print_cli_help() {
+    println!(
+        "EpiLedger v{} — Native Rust Public Health Informatics Workbench",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!("Copyright CRV Science Network (GPL-3.0-or-later) | https://crvscience.com");
+    println!();
+    println!("Usage: epiledger [SUBCOMMAND | OPTIONS]");
+    println!("Options:");
+    println!("  -h, --help                                               Print this help message and exit");
+    println!("  -V, --version                                            Print version information and exit");
+    println!("  --screenshot <OUT.png> [--screenshot-view <1|2|3>]       Render offscreen wgpu screenshot and exit");
+    println!("Available commands:");
+    println!("  epiledger                                                Launch native 16-tab wgpu/egui desktop workstation");
+    println!("  epiledger tui                                            Launch headless 8-view ratatui SSH terminal dashboard");
+    println!("  epiledger vintages                                       List bitemporal vintages in SQLite");
+    println!("  epiledger analyze [vintage_id]                           Run Cori Rt + Farrington GLM on a vintage");
+    println!("  epiledger nowcast [vintage_id] [delay_wk]                Run right-truncation reporting-delay nowcast");
+    println!("  epiledger seir-forecast [vid] [weeks] [trajectories]     Run scoped-parallel RK4 + stochastic SEIR forecast");
+    println!("  epiledger backtest-wis [vid] [horizon] [origins]         Run K=11 WIS backtest & Inverse-WIS ensemble stacking");
+    println!("  epiledger export-sitrep [vid] [out.html] [mask]          Export standalone zero-JS HTML5/SVG Situation Report");
+    println!("  epiledger dp-release [vid] [eps] [cap] [out.csv]         Release Discrete Laplace DP series & log SQLite budget");
+    println!("  epiledger audit-verify [limit]                           Verify genesis-to-tip SHA-256 tamper-evident audit chain");
+    println!("  epiledger pprl-bench [num_patients] [blocked|cartesian]  Benchmark LSH + Birth-Year hash-blocked PPRL scaling");
+    println!("  epiledger offspring-k [z_list|csv|builtin] [all|ztnb]    Fit Negative Binomial R0 & dispersion k MLE + 80/20 share");
+    println!("  epiledger contact-network [pairs.csv|builtin] [out.dot]  Analyze bipartite case-venue k-core, betweenness & SI");
+    println!("  epiledger wastewater-demix [snv.csv|builtin] [log2|sqrt] Deconvolve sewage SNV barcodes via Freyja L1 simplex");
+    println!("  epiledger antibiogram [amr.csv|builtin] [dedup|raw] [u]  Compute CLSI M39 cumulative antibiogram & MDR/XDR");
+    println!("  epiledger capture-recapture [csv|chapman|builtin]        Fit 8-model 3-source log-linear & Chapman completeness");
+    println!("  epiledger syndromic-classify [ed.csv|builtin] [query]    Classify NSSP ESSENCE chief complaints with NegEx");
+    println!("  epiledger cfr-adjust [csv|builtin] [delay_d] [cutoff]    Compute Nishiura right-truncated delay-adjusted cCFR");
+    println!("  epiledger hospital-surge [builtin|seir] [icu] [vent]     Project competing-risk acute, ICU & ventilator surge");
+    println!("  epiledger lineage-fit [csv|builtin] [linear|spline]      Fit multinomial variant logistics & variant Rt");
+    println!("  epiledger phylo-tree [fasta|builtin] [meta] [nwk]        Reconstruct joint SNP + onset outbreak tree");
+    println!("  epiledger dlnm-fit [csv|builtin] [max_lag] [spline|thr]  Fit Gasparrini Cross-Basis DLNM lag-exposure model");
+    println!("  epiledger excess-mortality [csv|builtin] [euromomo|wmd]  Compute Box-Cox Z-score excess mortality & YPLL-75");
+    println!("  epiledger import-hl7v2 [file.hl7|builtin] [dedup|raw]    Parse HL7 v2.5.1 ELR/NSSP & deduplicate via Bloom PPRL");
+    println!("  epiledger pprl-link [dice_cutoff] [episode_days]         Run 512-bit HMAC-SHA256 Bloom + Fellegi-Sunter EM linkage");
+    println!("  epiledger sero-foi [csv|builtin] [rev|irrev]             Fit age-structured catalytic / reverse-catalytic FOI");
+    println!("  epiledger tnd-ve                                         Estimate confounder-adjusted Test-Negative Design VE");
+    println!("  epiledger spatial-scan                                   Rank single US states by Poisson excess LLR");
+    println!("  epiledger zone-scan [geojson|builtin] [mc_reps]          Scoped-parallel Kulldorff multi-zone scan (up to M=9999)");
+    println!("  epiledger fetch-nndss [disease]                          Live CDC SODA NNDSS fetch + lazy cache");
+    println!("  epiledger fetch-nwss [state]                             Live CDC SODA NWSS wastewater fetch");
+    println!("  epiledger fetch-delphi [region] [epiweeks]               Live CMU Delphi FluView ILINet fetch");
+    println!("  epiledger fetch-faers [drug]                             Live openFDA FAERS weekly series fetch");
+    println!("  epiledger fetch-who [ind] [iso3]                         Live WHO GHO OData indicator fetch");
+    println!("  epiledger import-fhir <bundle.json> [code]               Import HL7 FHIR R4 Bundle into SQLite");
+    println!("  epiledger export-fhir <vid> <bundle.json>                Export vintage as HL7 FHIR R4 Observation Bundle");
+    println!("  epiledger survey-xpt <XPT> <s> <p> <w> <y>               Compute Taylor-linearized survey mean, SE & DEFF");
+    println!("  epiledger faers-prr <a> <b> <c> <d>                      Compute 2x2 PRR, ROR, and BCPNN IC / IC025");
+    println!("  epiledger import-csv <file.csv>                          Import CSV/TSV into SQLite vintage ledger");
+    println!("  epiledger export-csv <vid> <out>                         Export vintage to CSV");
+    println!("  epiledger inspect-xpt <file.XPT>                         Decode CDC NHANES/BRFSS SAS XPORT v5 file");
+}
+
 pub fn run_cli(args: &[String], db_path: &Path) -> Result<(), EpiError> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h" | "help") {
+        print_cli_help();
+        return Ok(());
+    }
+    if matches!(args[0].as_str(), "--version" | "-V" | "version") {
+        println!("epiledger {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let mut store = EpiStore::open_file(db_path)?;
 
     if store.list_vintages()?.is_empty() {
@@ -1431,48 +1496,7 @@ pub fn run_cli(args: &[String], db_path: &Path) -> Result<(), EpiError> {
         }
         other => {
             println!("EpiLedger Native Rust CLI — Unrecognized subcommand '{other}'");
-            println!("Available commands:");
-            println!("  epiledger                                                Launch native 16-tab wgpu/egui desktop workstation");
-            println!("  epiledger tui                                            Launch headless 8-view ratatui SSH terminal dashboard");
-            println!("  epiledger vintages                                       List bitemporal vintages in SQLite");
-            println!("  epiledger analyze [vintage_id]                           Run Cori Rt + Farrington GLM on a vintage");
-            println!("  epiledger nowcast [vintage_id] [delay_wk]                Run right-truncation reporting-delay nowcast");
-            println!("  epiledger seir-forecast [vid] [weeks] [trajectories]     Run scoped-parallel RK4 + stochastic SEIR forecast");
-            println!("  epiledger backtest-wis [vid] [horizon] [origins]         Run K=11 WIS backtest & Inverse-WIS ensemble stacking");
-            println!("  epiledger export-sitrep [vid] [out.html] [mask]          Export standalone zero-JS HTML5/SVG Situation Report");
-            println!("  epiledger dp-release [vid] [eps] [cap] [out.csv]         Release Discrete Laplace DP series & log SQLite budget");
-            println!("  epiledger audit-verify [limit]                           Verify genesis-to-tip SHA-256 tamper-evident audit chain");
-            println!("  epiledger pprl-bench [num_patients] [blocked|cartesian]  Benchmark LSH + Birth-Year hash-blocked PPRL scaling");
-            println!("  epiledger offspring-k [z_list|csv|builtin] [all|ztnb]    Fit Negative Binomial R0 & dispersion k MLE + 80/20 share");
-            println!("  epiledger contact-network [pairs.csv|builtin] [out.dot]  Analyze bipartite case-venue k-core, betweenness & SI");
-            println!("  epiledger wastewater-demix [snv.csv|builtin] [log2|sqrt] Deconvolve sewage SNV barcodes via Freyja L1 simplex");
-            println!("  epiledger antibiogram [amr.csv|builtin] [dedup|raw] [u]  Compute CLSI M39 cumulative antibiogram & MDR/XDR");
-            println!("  epiledger capture-recapture [csv|chapman|builtin]        Fit 8-model 3-source log-linear & Chapman completeness");
-            println!("  epiledger syndromic-classify [ed.csv|builtin] [query]    Classify NSSP ESSENCE chief complaints with NegEx");
-            println!("  epiledger cfr-adjust [csv|builtin] [delay_d] [cutoff]    Compute Nishiura right-truncated delay-adjusted cCFR");
-            println!("  epiledger hospital-surge [builtin|seir] [icu] [vent]     Project competing-risk acute, ICU & ventilator surge");
-            println!("  epiledger lineage-fit [csv|builtin] [linear|spline]      Fit multinomial variant logistics & variant Rt");
-            println!("  epiledger phylo-tree [fasta|builtin] [meta] [nwk]        Reconstruct joint SNP + onset outbreak tree");
-            println!("  epiledger dlnm-fit [csv|builtin] [max_lag] [spline|thr]  Fit Gasparrini Cross-Basis DLNM lag-exposure model");
-            println!("  epiledger excess-mortality [csv|builtin] [euromomo|wmd]  Compute Box-Cox Z-score excess mortality & YPLL-75");
-            println!("  epiledger import-hl7v2 [file.hl7|builtin] [dedup|raw]    Parse HL7 v2.5.1 ELR/NSSP & deduplicate via Bloom PPRL");
-            println!("  epiledger pprl-link [dice_cutoff] [episode_days]         Run 512-bit HMAC-SHA256 Bloom + Fellegi-Sunter EM linkage");
-            println!("  epiledger sero-foi [csv|builtin] [rev|irrev]             Fit age-structured catalytic / reverse-catalytic FOI");
-            println!("  epiledger tnd-ve                                         Estimate confounder-adjusted Test-Negative Design VE");
-            println!("  epiledger spatial-scan                                   Rank single US states by Poisson excess LLR");
-            println!("  epiledger zone-scan [geojson|builtin] [mc_reps]          Scoped-parallel Kulldorff multi-zone scan (up to M=9999)");
-            println!("  epiledger fetch-nndss [disease]                          Live CDC SODA NNDSS fetch + lazy cache");
-            println!("  epiledger fetch-nwss [state]                             Live CDC SODA NWSS wastewater fetch");
-            println!("  epiledger fetch-delphi [region] [epiweeks]               Live CMU Delphi FluView ILINet fetch");
-            println!("  epiledger fetch-faers [drug]                             Live openFDA FAERS weekly series fetch");
-            println!("  epiledger fetch-who [ind] [iso3]                         Live WHO GHO OData indicator fetch");
-            println!("  epiledger import-fhir <bundle.json> [code]               Import HL7 FHIR R4 Bundle into SQLite");
-            println!("  epiledger export-fhir <vid> <bundle.json>                Export vintage as HL7 FHIR R4 Observation Bundle");
-            println!("  epiledger survey-xpt <XPT> <s> <p> <w> <y>               Compute Taylor-linearized survey mean, SE & DEFF");
-            println!("  epiledger faers-prr <a> <b> <c> <d>                      Compute 2x2 PRR, ROR, and BCPNN IC / IC025");
-            println!("  epiledger import-csv <file.csv>                          Import CSV/TSV into SQLite vintage ledger");
-            println!("  epiledger export-csv <vid> <out>                         Export vintage to CSV");
-            println!("  epiledger inspect-xpt <file.XPT>                         Decode CDC NHANES/BRFSS SAS XPORT v5 file");
+            print_cli_help();
         }
     }
 

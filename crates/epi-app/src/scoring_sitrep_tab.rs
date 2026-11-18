@@ -214,6 +214,15 @@ impl ScoringSitrepWorkbenchState {
                         .desired_width(185.0)
                         .hint_text("epiledger_sitrep.html"),
                 );
+                if ui.button("Save As...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("HTML", &["html", "htm"])
+                        .set_file_name("epiledger_sitrep.html")
+                        .save_file()
+                    {
+                        self.sitrep_out_path = p.display().to_string();
+                    }
+                }
                 if ui
                     .button("Export Standalone HTML/SVG SitRep")
                     .clicked()

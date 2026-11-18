@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod cartogram;
 mod cli;
 mod crc_syndromic_tab;
@@ -28,7 +30,36 @@ mod sitrep_export;
 mod tui;
 mod wastewater_amr_tab;
 
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+const APP_ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon_64x64.rgba"));
+
+#[cfg(windows)]
+fn attach_parent_console_if_cli() {
+    if std::env::args_os().len() > 1 {
+        const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn AttachConsole(dw_process_id: u32) -> i32;
+        }
+        unsafe {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console_if_cli() {}
+
+fn is_help_flag(arg: &str) -> bool {
+    matches!(arg, "--help" | "-h" | "help")
+}
+
+fn is_version_flag(arg: &str) -> bool {
+    matches!(arg, "--version" | "-V")
+}
 
 fn parse_screenshot_arg(
     args: &[String],
@@ -132,25 +163,16 @@ fn write_rgba_png(
     let row_bytes = width as usize * 4;
     let mut raw = Vec::with_capacity(height as usize * (1 + row_bytes));
     for row in rgba.chunks_exact(row_bytes) {
-        raw.push(0);
-        raw.extend_from_slice(row);
+        // PNG Sub filter (type 1): subtract left RGBA pixel (bpp = 4) for high DEFLATE compression
+        raw.push(1);
+        for (x, &b) in row.iter().enumerate() {
+            let left = if x >= 4 { row[x - 4] } else { 0 };
+            raw.push(b.wrapping_sub(left));
+        }
     }
-    let (mut s1, mut s2) = (1u32, 0u32);
-    for &b in &raw {
-        s1 = (s1 + b as u32) % 65521;
-        s2 = (s2 + s1) % 65521;
-    }
-    let mut zlib = Vec::with_capacity(raw.len() + 32);
-    zlib.extend_from_slice(&[0x78, 0x01]);
-    let chunks: Vec<&[u8]> = if raw.is_empty() { vec![&[]] } else { raw.chunks(65535).collect() };
-    for (i, chunk) in chunks.iter().enumerate() {
-        zlib.push(if i + 1 == chunks.len() { 1 } else { 0 });
-        let len = chunk.len() as u16;
-        zlib.extend_from_slice(&len.to_le_bytes());
-        zlib.extend_from_slice(&(!len).to_le_bytes());
-        zlib.extend_from_slice(chunk);
-    }
-    zlib.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&raw)?;
+    let zlib = encoder.finish()?;
     let mut ihdr = Vec::with_capacity(13);
     ihdr.extend_from_slice(&width.to_be_bytes());
     ihdr.extend_from_slice(&height.to_be_bytes());
@@ -339,7 +361,16 @@ fn capture_headless_screenshot(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    attach_parent_console_if_cli();
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| is_help_flag(a)) {
+        cli::print_cli_help();
+        return Ok(());
+    }
+    if args.get(1).is_some_and(|a| is_version_flag(a)) {
+        println!("epiledger {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if let Some((out_png, view)) = parse_screenshot_arg(&args)? {
         return capture_headless_screenshot(&out_png, view);
     }
@@ -362,7 +393,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1480.0, 920.0])
             .with_min_inner_size([1060.0, 660.0])
-            .with_title("EpiLedger — Native Rust Public Health Informatics Workbench"),
+            .with_title("EpiLedger — Native Rust Public Health Informatics Workbench")
+            .with_icon(Arc::new(egui::IconData {
+                rgba: APP_ICON_RGBA.to_vec(),
+                width: 64,
+                height: 64,
+            })),
         ..Default::default()
     };
 
@@ -372,4 +408,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| Ok(Box::new(gui::EpiLedgerGuiApp::new(cc, db_path)))),
     )
     .map_err(|e| format!("eframe launch error: {e}").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_rgba_png_deflate_under_1mb_and_valid_ihdr() {
+        let width = 1600u32;
+        let height = 1000u32;
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                // UI-like dark background with periodic chart bands
+                if (200..600).contains(&y) && (x % 12 < 8) {
+                    rgba[idx] = 34;
+                    rgba[idx + 1] = 211;
+                    rgba[idx + 2] = 238;
+                } else {
+                    rgba[idx] = 18;
+                    rgba[idx + 1] = 22;
+                    rgba[idx + 2] = 30;
+                }
+                rgba[idx + 3] = 255;
+            }
+        }
+        let tmp = std::env::temp_dir().join(format!(
+            "epiledger_png_test_{}.png",
+            std::process::id()
+        ));
+        write_rgba_png(&tmp, width, height, &rgba).expect("write PNG");
+        let bytes = std::fs::read(&tmp).expect("read PNG");
+        let _ = std::fs::remove_file(&tmp);
+
+        assert!(bytes.len() < 1_000_000, "PNG size {} >= 1 MB", bytes.len());
+        assert_eq!(&bytes[0..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&bytes[12..16], b"IHDR");
+        let w = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        let h = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        assert_eq!((w, h), (width, height));
+        assert_eq!(bytes[24], 8); // 8-bit depth
+        assert_eq!(bytes[25], 6); // RGBA color type
+    }
+
+    #[test]
+    fn test_cli_help_and_screenshot_arg_parsing() {
+        assert!(is_help_flag("--help"));
+        assert!(is_help_flag("-h"));
+        assert!(is_help_flag("help"));
+        assert!(!is_help_flag("--screenshot"));
+        assert!(is_version_flag("--version"));
+        assert!(is_version_flag("-V"));
+
+        let parsed = parse_screenshot_arg(&[
+            "epiledger".to_string(),
+            "--screenshot=out.png".to_string(),
+            "--screenshot-view".to_string(),
+            "3".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(parsed, Some((PathBuf::from("out.png"), 3)));
+
+        let tmp_db = std::env::temp_dir().join(format!(
+            "epiledger_no_db_on_help_{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp_db);
+        cli::run_cli(&["--help".to_string()], &tmp_db).expect("--help exits Ok");
+        assert!(
+            !tmp_db.exists(),
+            "--help must not create a SQLite database file"
+        );
+    }
 }

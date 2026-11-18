@@ -125,12 +125,34 @@ const PRE_NEGATION_TRIGGERS: &[&str] = &[
     "neg",
     "rule out",
     "r o",
+    "ruled out for",
+    "ruled out of",
     "free of",
+    "no evidence of",
     "absent",
     "resolved",
     "hx of",
     "history of",
 ];
+
+const POST_NEGATION_TRIGGERS: &[&str] = &[
+    "ruled out",
+    "rule out",
+    "r o",
+    "negative",
+    "neg",
+    "not detected",
+    "undetected",
+    "no evidence",
+    "absent",
+    "unlikely",
+    "excluded",
+    "resolved",
+    "not present",
+    "not found",
+];
+
+const POSITIVE_POLARITY_MARKERS: &[&str] = &["positive", "pos", "present", "confirmed"];
 
 const CLAUSE_BREAKERS: &[&str] = &[
     ";",
@@ -145,22 +167,128 @@ const CLAUSE_BREAKERS: &[&str] = &[
     "c o",
 ];
 
-/// Normalize ED triage shorthand and punctuation while preserving clause boundary markers (`;` and `.`).
+fn is_comma_clause_boundary_after(after: &[&str]) -> bool {
+    let is_boundary = |tok: &str| {
+        matches!(tok, ";" | "." | ",") || CLAUSE_BREAKERS.contains(&tok)
+    };
+    let Some(&first) = after.first() else {
+        return false;
+    };
+    if is_boundary(first) {
+        return false;
+    }
+
+    // Unambiguous pre-negation intros
+    if matches!(first, "denies" | "denied" | "deny" | "without") {
+        return true;
+    }
+    if after.starts_with(&["free", "of"])
+        || after.starts_with(&["hx", "of"])
+        || after.starts_with(&["history", "of"])
+        || after.starts_with(&["no", "evidence", "of"])
+        || after.starts_with(&["ruled", "out", "for"])
+        || after.starts_with(&["ruled", "out", "of"])
+    {
+        return true;
+    }
+
+    // Expanded contraction negation ("doesn't", "don't", "can't", etc.)
+    if after.len() >= 2
+        && after[1] == "not"
+        && matches!(
+            first,
+            "do" | "does"
+                | "did"
+                | "can"
+                | "is"
+                | "are"
+                | "was"
+                | "were"
+                | "has"
+                | "have"
+                | "will"
+                | "would"
+                | "could"
+                | "should"
+        )
+    {
+        return true;
+    }
+
+    // "no" pre-negates unless it is trailing post-negation "no evidence"
+    if first == "no" {
+        if after.starts_with(&["no", "evidence"]) {
+            return after.len() > 2 && !is_boundary(after[2]);
+        }
+        return true;
+    }
+
+    // "not" pre-negates (and isolates "fever, not ruled out") unless it is trailing
+    // post-negation "not detected" / "not present" / "not found"
+    if first == "not" {
+        if after.len() >= 2
+            && matches!(after[1], "detected" | "present" | "found")
+            && (after.len() == 2 || is_boundary(after[2]))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    // Dual-use 2-token pre-negations ("rule out X", "r o X") and infinitive "to rule out X" / "to r o X" when followed by content
+    if after.starts_with(&["rule", "out"]) || after.starts_with(&["r", "o"]) {
+        return after.len() > 2 && !is_boundary(after[2]);
+    }
+    if after.starts_with(&["to", "rule", "out"]) || after.starts_with(&["to", "r", "o"]) {
+        return after.len() > 3 && !is_boundary(after[3]);
+    }
+
+    // Dual-use 1-token triggers ("negative", "neg", "absent", "resolved") act as pre-negations
+    // when introducing a following target ("negative for fever", "absent cough"), and remain
+    // post-negations when terminating a clause ("covid, negative" / "fever, absent").
+    if matches!(first, "negative" | "neg") {
+        return after.len() >= 2
+            && (matches!(after[1], "for" | "of")
+                || (!is_boundary(after[1]) && !POSITIVE_POLARITY_MARKERS.contains(&after[1])));
+    }
+    if matches!(first, "absent" | "resolved") {
+        return after.len() >= 2
+            && !is_boundary(after[1])
+            && !POSITIVE_POLARITY_MARKERS.contains(&after[1]);
+    }
+
+    false
+}
+
+/// Normalize ED triage shorthand and punctuation while preserving clause boundary markers (`;` and `.`),
+/// keeping decimal points between ASCII digits (e.g., `102.4`) intact, preserving commas before
+/// pre-negation clauses as `;`, collapsing `c/o` (`c o`) to `;`, and expanding common contractions.
 pub fn normalize_chief_complaint(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
     let mut lowered = String::with_capacity(raw.len() + 16);
-    for ch in raw.chars() {
+    for (idx, &ch) in chars.iter().enumerate() {
         if ch.is_ascii_alphanumeric() || ch.is_whitespace() {
             lowered.push(ch.to_ascii_lowercase());
-        } else if ch == ';' || ch == '.' {
-            lowered.push(' ');
-            lowered.push(ch);
-            lowered.push(' ');
-        } else if ch == '/' || ch == '-' || ch == ',' {
+        } else if ch == '.' {
+            let between_digits = idx > 0
+                && idx + 1 < chars.len()
+                && chars[idx - 1].is_ascii_digit()
+                && chars[idx + 1].is_ascii_digit();
+            if between_digits {
+                lowered.push('.');
+            } else {
+                lowered.push_str(" . ");
+            }
+        } else if ch == ';' {
+            lowered.push_str(" ; ");
+        } else if ch == ',' {
+            lowered.push_str(" , ");
+        } else if matches!(ch, '/' | '-' | ':' | '(' | ')' | '[' | ']') {
             lowered.push(' ');
         }
     }
 
-    // Expand standard ED triage abbreviations token-by-token
+    // Expand standard ED triage abbreviations and common English contractions token-by-token
     let mut expanded_tokens: Vec<&str> = Vec::new();
     let raw_toks: Vec<&str> = lowered.split_whitespace().collect();
     let mut i = 0;
@@ -179,6 +307,11 @@ pub fn normalize_chief_complaint(raw: &str) -> String {
             i += 2;
             continue;
         }
+        if i + 1 < raw_toks.len() && raw_toks[i] == "c" && raw_toks[i + 1] == "o" {
+            expanded_tokens.push(";");
+            i += 2;
+            continue;
+        }
         match raw_toks[i] {
             "sob" => expanded_tokens.extend(["shortness", "of", "breath"]),
             "uri" => expanded_tokens.extend(["upper", "respiratory", "infection"]),
@@ -187,16 +320,60 @@ pub fn normalize_chief_complaint(raw: &str) -> String {
             "ha" => expanded_tokens.push("headache"),
             "fev" | "tmax" => expanded_tokens.push("fever"),
             "vomit" | "emesis" => expanded_tokens.push("vomiting"),
+            "dont" => expanded_tokens.extend(["do", "not"]),
+            "doesnt" => expanded_tokens.extend(["does", "not"]),
+            "didnt" => expanded_tokens.extend(["did", "not"]),
+            "cant" => expanded_tokens.extend(["can", "not"]),
+            "isnt" => expanded_tokens.extend(["is", "not"]),
+            "arent" => expanded_tokens.extend(["are", "not"]),
+            "wasnt" => expanded_tokens.extend(["was", "not"]),
+            "werent" => expanded_tokens.extend(["were", "not"]),
+            "hasnt" => expanded_tokens.extend(["has", "not"]),
+            "havent" => expanded_tokens.extend(["have", "not"]),
+            "wont" => expanded_tokens.extend(["will", "not"]),
+            "wouldnt" => expanded_tokens.extend(["would", "not"]),
+            "couldnt" => expanded_tokens.extend(["could", "not"]),
+            "shouldnt" => expanded_tokens.extend(["should", "not"]),
             other => expanded_tokens.push(other),
         }
         i += 1;
     }
-    expanded_tokens.join(" ")
+
+    // Resolve `,` tokens: preserve as `;` before pre-negation clauses, drop before plain coordinate items.
+    let mut resolved_tokens: Vec<&str> = Vec::with_capacity(expanded_tokens.len());
+    for (idx, &tok) in expanded_tokens.iter().enumerate() {
+        if tok == "," {
+            if is_comma_clause_boundary_after(&expanded_tokens[idx + 1..]) {
+                if resolved_tokens.last().copied() != Some(";") {
+                    resolved_tokens.push(";");
+                }
+            }
+        } else {
+            resolved_tokens.push(tok);
+        }
+    }
+    resolved_tokens.join(" ")
+}
+
+fn slice_contains_phrase_toks(tokens: &[&str], phrase: &str) -> bool {
+    let trig_toks: Vec<&str> = phrase.split_whitespace().collect();
+    if trig_toks.is_empty() || tokens.len() < trig_toks.len() {
+        return false;
+    }
+    tokens
+        .windows(trig_toks.len())
+        .any(|w| w == trig_toks.as_slice())
 }
 
 /// Check if a candidate symptom phrase appears affirmatively (un-negated) or only under negation.
+/// Evaluates both pre-negation triggers (preceding tokens up to clause boundary / prior post-negation)
+/// and NegEx post-negation triggers (trailing tokens up to clause boundary or positive markers).
 /// Returns `(affirmative_hit, negated_hit)`.
-pub fn match_affirmative_or_negated(normalized_cc: &str, phrase: &str, neg_window_tokens: usize) -> (bool, bool) {
+pub fn match_affirmative_or_negated(
+    normalized_cc: &str,
+    phrase: &str,
+    neg_window_tokens: usize,
+) -> (bool, bool) {
     let target_toks: Vec<&str> = phrase.split_whitespace().collect();
     if target_toks.is_empty() {
         return (false, false);
@@ -206,28 +383,142 @@ pub fn match_affirmative_or_negated(normalized_cc: &str, phrase: &str, neg_windo
         return (false, false);
     }
 
+    let win = neg_window_tokens.max(1);
     let mut found_affirmative = false;
     let mut found_negated = false;
 
     for pos in 0..=(cc_toks.len() - target_toks.len()) {
         if cc_toks[pos..pos + target_toks.len()] == target_toks[..] {
-            // Inspect up to `neg_window_tokens` preceding tokens up to the nearest clause breaker
-            let win_start = pos.saturating_sub(neg_window_tokens.max(1));
-            let mut active_slice_start = win_start;
-            for back in (win_start..pos).rev() {
-                if CLAUSE_BREAKERS.contains(&cc_toks[back]) {
-                    active_slice_start = back + 1;
+            // 1. Pre-negation lookback up to `win` tokens, stopping at clause breakers
+            // or unnegated positive polarity markers (excluding "not present" / "not positive")
+            let mut clause_start = 0usize;
+            for back in (0..pos).rev() {
+                let tok = cc_toks[back];
+                let is_positive_breaker = POSITIVE_POLARITY_MARKERS.contains(&tok)
+                    && !(back > 0 && matches!(cc_toks[back - 1], "not" | "no" | "never"));
+                if CLAUSE_BREAKERS.contains(&tok)
+                    || (tok == "o" && back > 0 && cc_toks[back - 1] == "c")
+                    || is_positive_breaker
+                {
+                    clause_start = back + 1;
                     break;
                 }
             }
-            let prefix = cc_toks[active_slice_start..pos].join(" ");
-            let prefix_padded = format!(" {prefix} ");
-            let is_neg = PRE_NEGATION_TRIGGERS.iter().any(|trig| {
-                let pat = format!(" {trig} ");
-                prefix_padded.contains(&pat)
+            let win_start = pos.saturating_sub(win);
+            let active_slice_start = win_start.max(clause_start);
+
+            // Prevent a prior symptom's post-negation phrase from bleeding forward across
+            // punctuation-free clauses into `pos`, while preserving true pre-negation intros
+            // (e.g. "no evidence of measles", "negative for fever", clause-initial "rule out fever",
+            // or "to rule out covid").
+            let mut prior_post_cut = active_slice_start;
+            for trig in POST_NEGATION_TRIGGERS {
+                let trig_toks: Vec<&str> = trig.split_whitespace().collect();
+                let tlen = trig_toks.len();
+                if tlen == 0 || pos < clause_start + tlen {
+                    continue;
+                }
+                let is_dual_use = matches!(
+                    *trig,
+                    "absent"
+                        | "resolved"
+                        | "rule out"
+                        | "r o"
+                        | "negative"
+                        | "neg"
+                        | "no evidence"
+                );
+                for idx in clause_start..=(pos - tlen) {
+                    if cc_toks[idx..idx + tlen] == trig_toks[..] {
+                        let trig_end = idx + tlen;
+                        if matches!(cc_toks.get(trig_end).copied(), Some("for" | "of")) {
+                            continue;
+                        }
+                        if is_dual_use
+                            && (idx == clause_start
+                                || (matches!(*trig, "rule out" | "r o")
+                                    && idx > clause_start
+                                    && cc_toks[idx - 1] == "to"))
+                        {
+                            continue;
+                        }
+                        prior_post_cut = prior_post_cut.max(trig_end);
+                    }
+                }
+            }
+
+            let pre_slice_start = active_slice_start.max(prior_post_cut);
+            let pre_tokens = &cc_toks[pre_slice_start..pos];
+            let is_pre_neg = PRE_NEGATION_TRIGGERS
+                .iter()
+                .any(|trig| slice_contains_phrase_toks(pre_tokens, trig));
+
+            // 2. Post-negation forward scan up to `win` tokens, stopping at clause breakers,
+            // positive markers (except "not present" which is a post-negation trigger),
+            // or pre-negation intros ("negative for", "no evidence of", "to rule out", etc.).
+            let post_start = pos + target_toks.len();
+            let post_max = (post_start + win).min(cc_toks.len());
+            let mut post_end = post_max;
+            for fwd in post_start..post_max {
+                let tok = cc_toks[fwd];
+                let next_is_prep = matches!(cc_toks.get(fwd + 1).copied(), Some("for" | "of"));
+                let is_to_rule_out = tok == "to"
+                    && ((cc_toks.get(fwd + 1).copied() == Some("rule")
+                        && cc_toks.get(fwd + 2).copied() == Some("out"))
+                        || (cc_toks.get(fwd + 1).copied() == Some("r")
+                            && cc_toks.get(fwd + 2).copied() == Some("o")))
+                    && cc_toks
+                        .get(fwd + 3)
+                        .is_some_and(|t| !CLAUSE_BREAKERS.contains(t));
+                let is_pre_neg_intro = (matches!(tok, "negative" | "neg") && next_is_prep)
+                    || (tok == "no"
+                        && cc_toks.get(fwd + 1).copied() == Some("evidence")
+                        && cc_toks.get(fwd + 2).copied() == Some("of"))
+                    || (tok == "free" && cc_toks.get(fwd + 1).copied() == Some("of"))
+                    || is_to_rule_out;
+                let is_two_tok_breaker =
+                    tok == "c" && cc_toks.get(fwd + 1).copied() == Some("o");
+                let is_positive_marker = POSITIVE_POLARITY_MARKERS.contains(&tok)
+                    && !(tok == "present" && fwd > post_start && cc_toks[fwd - 1] == "not");
+                if CLAUSE_BREAKERS.contains(&tok)
+                    || is_two_tok_breaker
+                    || is_positive_marker
+                    || matches!(tok, "denies" | "denied" | "deny" | "without")
+                    || is_pre_neg_intro
+                {
+                    post_end = fwd;
+                    break;
+                }
+            }
+            let post_tokens = &cc_toks[post_start..post_end];
+            let is_post_neg = POST_NEGATION_TRIGGERS.iter().any(|trig| {
+                let trig_toks: Vec<&str> = trig.split_whitespace().collect();
+                if trig_toks.is_empty() || post_tokens.len() < trig_toks.len() {
+                    return false;
+                }
+                (0..=post_tokens.len() - trig_toks.len()).any(|i| {
+                    post_tokens[i..i + trig_toks.len()] == trig_toks[..]
+                        && !matches!(
+                            cc_toks.get(post_start + i + trig_toks.len()).copied(),
+                            Some("for" | "of")
+                        )
+                        && !(i > 0
+                            && post_tokens[i - 1] == "not"
+                            && matches!(
+                                *trig,
+                                "ruled out"
+                                    | "rule out"
+                                    | "excluded"
+                                    | "resolved"
+                                    | "absent"
+                                    | "negative"
+                                    | "neg"
+                                    | "unlikely"
+                            ))
+                })
             });
 
-            if is_neg {
+            if is_pre_neg || is_post_neg {
                 found_negated = true;
             } else {
                 found_affirmative = true;
@@ -257,62 +548,283 @@ fn has_icd_prefix(codes: &[String], prefixes: &[&str]) -> Option<String> {
     None
 }
 
-/// Evaluate a custom NSSP ESSENCE boolean query of the form:
-/// `(^term1^ OR ^term2^) ANDNOT (^excl1^ OR ^excl2^)` against concatenated normalized CC + ICD string.
+/// Recursive-descent boolean AST for NSSP ESSENCE CCDD queries supporting
+/// `AND`, `OR`, `ANDNOT`, unary `NOT`, nested parentheses `(...)`, `,` (`OR` shorthand),
+/// `^...^` substring/ICD-prefix terms, and word/token-bounded bare or quoted terms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EssenceQueryAst {
+    Term(String),
+    SubstringTerm(String),
+    Not(Box<EssenceQueryAst>),
+    And(Box<EssenceQueryAst>, Box<EssenceQueryAst>),
+    Or(Box<EssenceQueryAst>, Box<EssenceQueryAst>),
+    AndNot(Box<EssenceQueryAst>, Box<EssenceQueryAst>),
+}
+
+fn matches_word_bounded(haystack: &str, needle: &str) -> bool {
+    let needle_toks: Vec<String> = needle
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    if needle_toks.is_empty() {
+        return !needle.is_empty() && haystack.contains(needle);
+    }
+    let hay_toks: Vec<String> = haystack
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    if hay_toks.len() < needle_toks.len() {
+        return false;
+    }
+    hay_toks
+        .windows(needle_toks.len())
+        .any(|w| w.iter().zip(needle_toks.iter()).all(|(a, b)| a == b))
+}
+
+impl EssenceQueryAst {
+    pub fn evaluate(&self, padded_ccdd: &str) -> bool {
+        match self {
+            Self::Term(t) => !t.is_empty() && matches_word_bounded(padded_ccdd, t.as_str()),
+            Self::SubstringTerm(t) => !t.is_empty() && padded_ccdd.contains(t.as_str()),
+            Self::Not(inner) => !inner.evaluate(padded_ccdd),
+            Self::And(lhs, rhs) => lhs.evaluate(padded_ccdd) && rhs.evaluate(padded_ccdd),
+            Self::Or(lhs, rhs) => lhs.evaluate(padded_ccdd) || rhs.evaluate(padded_ccdd),
+            Self::AndNot(lhs, rhs) => lhs.evaluate(padded_ccdd) && !rhs.evaluate(padded_ccdd),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EssenceToken {
+    LParen,
+    RParen,
+    And,
+    Or,
+    AndNot,
+    Not,
+    Term(String),
+    SubstringTerm(String),
+}
+
+fn tokenize_essence_query(query_expr: &str) -> Result<Vec<EssenceToken>, EpiError> {
+    let chars: Vec<char> = query_expr.chars().collect();
+    let n = chars.len();
+    let mut i = 0usize;
+    let mut tokens: Vec<EssenceToken> = Vec::new();
+    let mut bare_words: Vec<String> = Vec::new();
+
+    let flush_bare = |words: &mut Vec<String>, out: &mut Vec<EssenceToken>| {
+        if !words.is_empty() {
+            out.push(EssenceToken::Term(words.join(" ")));
+            words.clear();
+        }
+    };
+
+    while i < n {
+        let ch = chars[i];
+        if ch.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if ch == '(' {
+            flush_bare(&mut bare_words, &mut tokens);
+            tokens.push(EssenceToken::LParen);
+            i += 1;
+            continue;
+        }
+        if ch == ')' {
+            flush_bare(&mut bare_words, &mut tokens);
+            tokens.push(EssenceToken::RParen);
+            i += 1;
+            continue;
+        }
+        if ch == ',' {
+            flush_bare(&mut bare_words, &mut tokens);
+            tokens.push(EssenceToken::Or);
+            i += 1;
+            continue;
+        }
+        if ch == '^' || ch == '"' || ch == '\'' {
+            flush_bare(&mut bare_words, &mut tokens);
+            let delim = ch;
+            i += 1;
+            let start = i;
+            while i < n && chars[i] != delim {
+                i += 1;
+            }
+            if i >= n {
+                return Err(EpiError::Schema(format!(
+                    "Unterminated {delim}...{delim} term in ESSENCE query"
+                )));
+            }
+            let raw_inner: String = chars[start..i].iter().collect();
+            i += 1;
+            let cleaned = if delim == '^' {
+                raw_inner.trim().replace('.', "").to_ascii_lowercase()
+            } else {
+                raw_inner
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_ascii_lowercase()
+            };
+            if cleaned.is_empty() {
+                return Err(EpiError::Schema(
+                    "Empty delimited term in ESSENCE query".to_string(),
+                ));
+            }
+            if delim == '^' {
+                tokens.push(EssenceToken::SubstringTerm(cleaned));
+            } else {
+                tokens.push(EssenceToken::Term(cleaned));
+            }
+            continue;
+        }
+
+        let start = i;
+        while i < n
+            && !chars[i].is_whitespace()
+            && !matches!(chars[i], '(' | ')' | ',' | '^' | '"' | '\'')
+        {
+            i += 1;
+        }
+        let word: String = chars[start..i].iter().collect();
+        let lower = word.to_ascii_lowercase();
+        match lower.as_str() {
+            "and" => {
+                flush_bare(&mut bare_words, &mut tokens);
+                tokens.push(EssenceToken::And);
+            }
+            "or" => {
+                flush_bare(&mut bare_words, &mut tokens);
+                tokens.push(EssenceToken::Or);
+            }
+            "andnot" => {
+                flush_bare(&mut bare_words, &mut tokens);
+                tokens.push(EssenceToken::AndNot);
+            }
+            "not" => {
+                flush_bare(&mut bare_words, &mut tokens);
+                tokens.push(EssenceToken::Not);
+            }
+            _ => {
+                bare_words.push(lower);
+            }
+        }
+    }
+    flush_bare(&mut bare_words, &mut tokens);
+    Ok(tokens)
+}
+
+struct EssenceParser<'a> {
+    tokens: &'a [EssenceToken],
+    pos: usize,
+}
+
+impl<'a> EssenceParser<'a> {
+    fn peek(&self) -> Option<&EssenceToken> {
+        self.tokens.get(self.pos)
+    }
+
+    fn next(&mut self) -> Option<&EssenceToken> {
+        let t = self.tokens.get(self.pos);
+        if t.is_some() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn parse_or(&mut self) -> Result<EssenceQueryAst, EpiError> {
+        let mut node = self.parse_and()?;
+        while matches!(self.peek(), Some(EssenceToken::Or)) {
+            self.next();
+            let rhs = self.parse_and()?;
+            node = EssenceQueryAst::Or(Box::new(node), Box::new(rhs));
+        }
+        Ok(node)
+    }
+
+    fn parse_and(&mut self) -> Result<EssenceQueryAst, EpiError> {
+        let mut node = self.parse_not()?;
+        loop {
+            match self.peek() {
+                Some(EssenceToken::And) => {
+                    self.next();
+                    let rhs = self.parse_not()?;
+                    node = EssenceQueryAst::And(Box::new(node), Box::new(rhs));
+                }
+                Some(EssenceToken::AndNot) => {
+                    self.next();
+                    let rhs = self.parse_not()?;
+                    node = EssenceQueryAst::AndNot(Box::new(node), Box::new(rhs));
+                }
+                _ => break,
+            }
+        }
+        Ok(node)
+    }
+
+    fn parse_not(&mut self) -> Result<EssenceQueryAst, EpiError> {
+        if matches!(self.peek(), Some(EssenceToken::Not)) {
+            self.next();
+            let inner = self.parse_not()?;
+            return Ok(EssenceQueryAst::Not(Box::new(inner)));
+        }
+        self.parse_primary()
+    }
+
+    fn parse_primary(&mut self) -> Result<EssenceQueryAst, EpiError> {
+        match self.next().cloned() {
+            Some(EssenceToken::LParen) => {
+                let inner = self.parse_or()?;
+                match self.next() {
+                    Some(EssenceToken::RParen) => Ok(inner),
+                    _ => Err(EpiError::Schema(
+                        "Unclosed '(' in ESSENCE boolean query".to_string(),
+                    )),
+                }
+            }
+            Some(EssenceToken::Term(t)) => Ok(EssenceQueryAst::Term(t)),
+            Some(EssenceToken::SubstringTerm(t)) => Ok(EssenceQueryAst::SubstringTerm(t)),
+            Some(other) => Err(EpiError::Schema(format!(
+                "Unexpected token {other:?} in ESSENCE boolean query"
+            ))),
+            None => Err(EpiError::Schema(
+                "Unexpected end of ESSENCE boolean query".to_string(),
+            )),
+        }
+    }
+}
+
+pub fn parse_essence_query(query_expr: &str) -> Result<EssenceQueryAst, EpiError> {
+    let tokens = tokenize_essence_query(query_expr)?;
+    if tokens.is_empty() {
+        return Err(EpiError::Schema("Empty ESSENCE query".to_string()));
+    }
+    let mut parser = EssenceParser {
+        tokens: &tokens,
+        pos: 0,
+    };
+    let ast = parser.parse_or()?;
+    if parser.pos != tokens.len() {
+        return Err(EpiError::Schema(format!(
+            "Unexpected trailing token {:?} in ESSENCE query",
+            tokens[parser.pos]
+        )));
+    }
+    Ok(ast)
+}
+
+/// Evaluate a custom NSSP ESSENCE boolean query supporting `AND`, `OR`, `ANDNOT`, `NOT`,
+/// nested `(...)`, `,`, and `^term^` against concatenated normalized CC + ICD string.
 pub fn evaluate_custom_essence_query(normalized_ccdd: &str, query_expr: &str) -> bool {
-    let q = query_expr.trim().to_ascii_lowercase();
-    if q.is_empty() {
+    let Ok(ast) = parse_essence_query(query_expr) else {
         return false;
-    }
-
-    let (inc_part, exc_part) = if let Some(idx) = q.find("andnot") {
-        (&q[..idx], Some(&q[idx + 6..]))
-    } else {
-        (q.as_str(), None)
     };
-
-    let extract_terms = |segment: &str| -> Vec<String> {
-        let mut out = Vec::new();
-        if segment.contains('^') {
-            let parts: Vec<&str> = segment.split('^').collect();
-            for k in (1..parts.len()).step_by(2) {
-                let t = parts[k].trim().replace('.', "");
-                if !t.is_empty() {
-                    out.push(t);
-                }
-            }
-        } else {
-            for piece in segment.split("or") {
-                let cleaned = piece
-                    .trim()
-                    .trim_matches(|c: char| c == '(' || c == ')')
-                    .trim();
-                if !cleaned.is_empty() {
-                    out.push(cleaned.to_string());
-                }
-            }
-        }
-        out
-    };
-
-    let inc_terms = extract_terms(inc_part);
-    if inc_terms.is_empty() {
-        return false;
-    }
-
-    let padded = format!(" {normalized_ccdd} ");
-    let inc_hit = inc_terms.iter().any(|t| padded.contains(t.as_str()));
-    if !inc_hit {
-        return false;
-    }
-
-    if let Some(exc_seg) = exc_part {
-        let exc_terms = extract_terms(exc_seg);
-        if exc_terms.iter().any(|t| padded.contains(t.as_str())) {
-            return false;
-        }
-    }
-    true
+    let padded = format!(" {} ", normalized_ccdd.to_ascii_lowercase());
+    ast.evaluate(&padded)
 }
 
 /// Classify a batch of ED triage encounters across all 6 CDC NSSP ESSENCE syndromes + optional custom query.
@@ -818,5 +1330,298 @@ mod tests {
         let ds = build_syndrome_weekly_dataset(&batch, EssenceSyndromeId::IliRespiratory);
         assert_eq!(ds.points.len(), 8);
         assert!(ds.points.last().unwrap().count > ds.points.first().unwrap().count);
+    }
+
+    #[test]
+    fn test_post_negations_and_clause_isolation() {
+        let norm1 = normalize_chief_complaint("Fever ruled out; cough present");
+        let (fev_aff, fev_neg) = match_affirmative_or_negated(&norm1, "fever", 5);
+        assert!(!fev_aff, "fever ruled out must not be affirmative");
+        assert!(fev_neg, "fever ruled out must record negation");
+        let (cough_aff, cough_neg) = match_affirmative_or_negated(&norm1, "cough", 5);
+        assert!(cough_aff, "cough in next clause must stay affirmative");
+        assert!(!cough_neg);
+
+        let norm2 = normalize_chief_complaint("covid:negative; influenza not detected; fever positive");
+        let (cov_aff, cov_neg) = match_affirmative_or_negated(&norm2, "covid", 5);
+        assert!(!cov_aff && cov_neg, "colon-delimited post-negation must block covid");
+        let (flu_aff, flu_neg) = match_affirmative_or_negated(&norm2, "influenza", 5);
+        assert!(!flu_aff && flu_neg, "not detected post-negation must block influenza");
+        let (fev2_aff, _) = match_affirmative_or_negated(&norm2, "fever", 5);
+        assert!(fev2_aff, "fever positive after semicolon must remain affirmative");
+
+        // Post-negation without semicolon must not bleed into following positive symptom
+        let norm3 = normalize_chief_complaint("cough not detected fever positive");
+        let (c3_aff, c3_neg) = match_affirmative_or_negated(&norm3, "cough", 5);
+        let (f3_aff, f3_neg) = match_affirmative_or_negated(&norm3, "fever", 5);
+        assert!(!c3_aff && c3_neg);
+        assert!(f3_aff && !f3_neg);
+    }
+
+    #[test]
+    fn test_essence_boolean_ast_precedence_nesting_and_word_boundaries() {
+        // Word-boundary safety: "or" inside "sore throat" and "norovirus" must NOT split
+        let cc1 = "sore throat and fever j101";
+        assert!(evaluate_custom_essence_query(
+            cc1,
+            "(sore throat OR norovirus) AND ^J10^"
+        ));
+        assert!(!evaluate_custom_essence_query(
+            "sore throat only r070",
+            "(sore throat OR norovirus) AND ^J10^"
+        ));
+        assert!(evaluate_custom_essence_query(
+            "acute norovirus gastroenteritis",
+            "sore throat OR norovirus"
+        ));
+
+        // Nested precedence: AND binds tighter than OR; NOT and ANDNOT exclude correctly
+        let q = "((^fever^ AND (^cough^ OR ^dyspnea^)) OR ^anosmia^) ANDNOT (^vaccine^ OR NOT ^cough^)";
+        assert!(evaluate_custom_essence_query("fever and cough u071", q));
+        assert!(!evaluate_custom_essence_query("fever and cough vaccine", q));
+        assert!(!evaluate_custom_essence_query("anosmia without dyspnea", q));
+        assert!(evaluate_custom_essence_query("anosmia", "^anosmia^ OR ^fever^ AND ^cough^"));
+        assert!(!evaluate_custom_essence_query("fever", "^anosmia^ OR ^fever^ AND ^cough^"));
+
+        // Malformed queries return false safely without panicking
+        assert!(!evaluate_custom_essence_query(cc1, ""));
+        assert!(!evaluate_custom_essence_query(cc1, "(^fever^ AND"));
+        assert!(!evaluate_custom_essence_query(cc1, "^unclosed"));
+
+        // Bare/quoted terms must respect word/token boundaries while ^...^ keeps substring matching
+        assert!(!evaluate_custom_essence_query("acid reflux", "flu"));
+        assert!(!evaluate_custom_essence_query("motor vehicle crash", "rash"));
+        assert!(!evaluate_custom_essence_query("blood in stool", "od"));
+        assert!(!evaluate_custom_essence_query("patient has pain", "ha"));
+        assert!(!evaluate_custom_essence_query("acid reflux", "\"flu\""));
+        assert!(evaluate_custom_essence_query("acute flu symptoms", "flu"));
+        assert!(evaluate_custom_essence_query("maculopapular rash", "rash"));
+        assert!(evaluate_custom_essence_query("high fever j101", "^j10^"));
+    }
+
+    #[test]
+    fn test_negex_challenger_regressions_and_normalization() {
+        // 1. "no evidence of <symptom>" must negate the target symptom
+        let norm_measles = normalize_chief_complaint("no evidence of measles");
+        assert_eq!(
+            match_affirmative_or_negated(&norm_measles, "measles", 5),
+            (false, true),
+            "no evidence of measles must be negated"
+        );
+        let norm_measles_fev = normalize_chief_complaint("no evidence of measles; fever present");
+        assert_eq!(
+            match_affirmative_or_negated(&norm_measles_fev, "measles", 5),
+            (false, true)
+        );
+        assert_eq!(
+            match_affirmative_or_negated(&norm_measles_fev, "fever", 5),
+            (true, false)
+        );
+        // Post-negation form "measles no evidence" still negates
+        let norm_post_ev = normalize_chief_complaint("measles no evidence; cough present");
+        assert_eq!(
+            match_affirmative_or_negated(&norm_post_ev, "measles", 5),
+            (false, true)
+        );
+        assert_eq!(
+            match_affirmative_or_negated(&norm_post_ev, "cough", 5),
+            (true, false)
+        );
+
+        // 2. Punctuation-free post-negation bleed & "negative for" false post-negation
+        let n_covid_mild = normalize_chief_complaint("covid negative mild fever");
+        assert_eq!(
+            match_affirmative_or_negated(&n_covid_mild, "covid", 5),
+            (false, true)
+        );
+        assert_eq!(
+            match_affirmative_or_negated(&n_covid_mild, "fever", 5),
+            (true, false)
+        );
+
+        for text in [
+            "fever absent cough present",
+            "fever resolved cough present",
+            "fever rule out cough present",
+        ] {
+            let n = normalize_chief_complaint(text);
+            assert_eq!(
+                match_affirmative_or_negated(&n, "fever", 5),
+                (false, true),
+                "expected fever negated in {text:?} (norm={n:?})"
+            );
+            assert_eq!(
+                match_affirmative_or_negated(&n, "cough", 5),
+                (true, false),
+                "expected cough affirmative in {text:?} (norm={n:?})"
+            );
+        }
+
+        let n_neg_for = normalize_chief_complaint("has cough, negative for fever");
+        assert_eq!(
+            match_affirmative_or_negated(&n_neg_for, "cough", 5),
+            (true, false),
+            "cough must remain affirmative before 'negative for fever'"
+        );
+        assert_eq!(
+            match_affirmative_or_negated(&n_neg_for, "fever", 5),
+            (false, true),
+            "fever must be negated by 'negative for'"
+        );
+
+        // 3. Normalization: decimals, parens/brackets, contractions
+        let n_dec = normalize_chief_complaint("Tmax 102.4 ruled out");
+        assert_eq!(n_dec, "fever 102.4 ruled out");
+        assert_eq!(
+            match_affirmative_or_negated(&n_dec, "fever", 5),
+            (false, true)
+        );
+
+        let n_paren = normalize_chief_complaint("fever(ruled out)");
+        assert_eq!(n_paren, "fever ruled out");
+        assert_eq!(
+            match_affirmative_or_negated(&n_paren, "fever", 5),
+            (false, true)
+        );
+
+        let n_contr = normalize_chief_complaint("don't have fever");
+        assert_eq!(
+            match_affirmative_or_negated(&n_contr, "fever", 5),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn test_comma_pre_negation_boundaries_and_co_clause_breaker() {
+        // 1. "has cough, rule out covid" -> cough affirmative, covid negated, no CovidLikeIllness
+        let enc_ro = EdTriageEncounter {
+            visit_id: "ADV-1".to_string(),
+            visit_iso_date: "2026-11-10".to_string(),
+            facility_id: "OR-GOODSAM-ED".to_string(),
+            patient_age: 42,
+            chief_complaint_text: "has cough, rule out covid".to_string(),
+            icd10_cm_codes: String::new(),
+        };
+        let norm_ro = normalize_chief_complaint(&enc_ro.chief_complaint_text);
+        assert_eq!(match_affirmative_or_negated(&norm_ro, "cough", 5), (true, false));
+        assert_eq!(match_affirmative_or_negated(&norm_ro, "covid", 5), (false, true));
+        let batch_ro = classify_ed_encounters_essence(&[enc_ro], "cough", 5);
+        assert!(
+            !batch_ro.classified_encounters[0]
+                .matched_syndromes
+                .contains(&EssenceSyndromeId::CovidLikeIllness),
+            "ruled-out covid must not trigger CovidLikeIllness"
+        );
+
+        // 2. "fever, r/o covid" -> fever affirmative, covid negated, no CovidLikeIllness
+        let enc_sl = EdTriageEncounter {
+            visit_id: "ADV-2".to_string(),
+            visit_iso_date: "2026-11-10".to_string(),
+            facility_id: "OR-GOODSAM-ED".to_string(),
+            patient_age: 35,
+            chief_complaint_text: "fever, r/o covid".to_string(),
+            icd10_cm_codes: String::new(),
+        };
+        let norm_sl = normalize_chief_complaint(&enc_sl.chief_complaint_text);
+        assert_eq!(match_affirmative_or_negated(&norm_sl, "fever", 5), (true, false));
+        assert_eq!(match_affirmative_or_negated(&norm_sl, "covid", 5), (false, true));
+        let batch_sl = classify_ed_encounters_essence(&[enc_sl], "fever", 5);
+        assert!(
+            !batch_sl.classified_encounters[0]
+                .matched_syndromes
+                .contains(&EssenceSyndromeId::CovidLikeIllness),
+            "r/o covid must not trigger CovidLikeIllness"
+        );
+
+        // 3. "fever, absent cough" -> fever affirmative, cough negated
+        let norm_abs = normalize_chief_complaint("fever, absent cough");
+        assert_eq!(match_affirmative_or_negated(&norm_abs, "fever", 5), (true, false));
+        assert_eq!(match_affirmative_or_negated(&norm_abs, "cough", 5), (false, true));
+
+        // 4. "denies fever c/o cough" (and un-collapsed "denies fever c o cough") -> fever negated, cough affirmative
+        let norm_co = normalize_chief_complaint("denies fever c/o cough");
+        assert_eq!(match_affirmative_or_negated(&norm_co, "fever", 5), (false, true));
+        assert_eq!(match_affirmative_or_negated(&norm_co, "cough", 5), (true, false));
+        assert_eq!(
+            match_affirmative_or_negated("denies fever c o cough", "fever", 5),
+            (false, true)
+        );
+        assert_eq!(
+            match_affirmative_or_negated("denies fever c o cough", "cough", 5),
+            (true, false)
+        );
+
+        // 5. Coordinate negated list "no fever, chills, cough" -> all three negated
+        let norm_list = normalize_chief_complaint("no fever, chills, cough");
+        assert_eq!(match_affirmative_or_negated(&norm_list, "fever", 5), (false, true));
+        assert_eq!(match_affirmative_or_negated(&norm_list, "chills", 5), (false, true));
+        assert_eq!(match_affirmative_or_negated(&norm_list, "cough", 5), (false, true));
+
+        // 6. Edge cases: "fever, not ruled out" stays affirmative; "fever, ruled out" and "covid, negative" stay negated
+        let norm_nro = normalize_chief_complaint("fever, not ruled out");
+        assert_eq!(match_affirmative_or_negated(&norm_nro, "fever", 5), (true, false));
+        let norm_ro_post = normalize_chief_complaint("fever, ruled out");
+        assert_eq!(match_affirmative_or_negated(&norm_ro_post, "fever", 5), (false, true));
+        let norm_neg_post = normalize_chief_complaint("covid, negative");
+        assert_eq!(match_affirmative_or_negated(&norm_neg_post, "covid", 5), (false, true));
+    }
+
+    #[test]
+    fn test_not_present_post_negation_and_diag_edge_cases() {
+        // Primary blocker: "fever, not present" and "fever not present" must negate fever
+        let norm_comma_np = normalize_chief_complaint("fever, not present");
+        assert_eq!(
+            match_affirmative_or_negated(&norm_comma_np, "fever", 5),
+            (false, true),
+            "fever, not present must be negated"
+        );
+        let norm_plain_np = normalize_chief_complaint("fever not present");
+        assert_eq!(
+            match_affirmative_or_negated(&norm_plain_np, "fever", 5),
+            (false, true),
+            "fever not present must be negated"
+        );
+        let norm_np_then_pos = normalize_chief_complaint("fever not present, cough present");
+        assert_eq!(match_affirmative_or_negated(&norm_np_then_pos, "fever", 5), (false, true));
+        assert_eq!(match_affirmative_or_negated(&norm_np_then_pos, "cough", 5), (true, false));
+
+        // Positive "present" and preceding post-negation + "present" must remain affirmative
+        let norm_pos_pres = normalize_chief_complaint("fever present");
+        assert_eq!(
+            match_affirmative_or_negated(&norm_pos_pres, "fever", 5),
+            (true, false),
+            "fever present must remain affirmative"
+        );
+        let norm_nd_fp = normalize_chief_complaint("cough not detected fever present");
+        assert_eq!(match_affirmative_or_negated(&norm_nd_fp, "cough", 5), (false, true));
+        assert_eq!(match_affirmative_or_negated(&norm_nd_fp, "fever", 5), (true, false));
+
+        // DIAG-1: "has cough, to rule out covid" (and unpunctuated / r/o variants)
+        for text in [
+            "has cough, to rule out covid",
+            "has cough to rule out covid",
+            "has cough, to r/o covid",
+        ] {
+            let n = normalize_chief_complaint(text);
+            assert_eq!(
+                match_affirmative_or_negated(&n, "cough", 5),
+                (true, false),
+                "cough must stay affirmative in {text:?} (norm={n:?})"
+            );
+            assert_eq!(
+                match_affirmative_or_negated(&n, "covid", 5),
+                (false, true),
+                "covid must be negated in {text:?} (norm={n:?})"
+            );
+        }
+
+        // DIAG-2: "fever, negative for influenza, positive for covid" (and negated positive marker)
+        let norm_diag2 = normalize_chief_complaint("fever, negative for influenza, positive for covid");
+        assert_eq!(match_affirmative_or_negated(&norm_diag2, "fever", 5), (true, false));
+        assert_eq!(match_affirmative_or_negated(&norm_diag2, "influenza", 5), (false, true));
+        assert_eq!(match_affirmative_or_negated(&norm_diag2, "covid", 5), (true, false));
+
+        let norm_not_pos = normalize_chief_complaint("not positive for covid");
+        assert_eq!(match_affirmative_or_negated(&norm_not_pos, "covid", 5), (false, true));
     }
 }

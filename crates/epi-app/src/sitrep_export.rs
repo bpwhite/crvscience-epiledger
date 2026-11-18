@@ -103,10 +103,10 @@ fn build_incidence_and_aberration_svg(ctx: &SitRepContext<'_>) -> String {
     // Bars for observed weekly counts
     let bar_w = (pw / (win as f64) * 0.66).clamp(2.5, 11.0);
     for (off, i) in (start..n_total).enumerate() {
-        let raw_c = ctx.dataset.points[i].count;
+        let raw_pt = &ctx.dataset.points[i];
+        let raw_c = raw_pt.count;
         let disp_c = if ctx.suppression_policy == SuppressionPolicy::NchsWonderLe9
-            && raw_c > 0.0
-            && raw_c <= 9.0
+            && (raw_pt.suppressed || (raw_c > 0.0 && raw_c <= 9.0))
         {
             0.0
         } else {
@@ -633,4 +633,69 @@ pub fn render_standalone_sitrep_html(ctx: &SitRepContext<'_>) -> String {
         fc_rows = fc_rows,
         cluster_rows = cluster_rows,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use epi_analytics::{
+        compute_aberrations, compute_cori_rt, nowcast_parametric_delay,
+        run_rolling_wis_backtest_and_ensemble, AberrationConfig, BacktestConfig, CoriRtConfig,
+        ParametricNowcastConfig, SeirConfig,
+    };
+    use epi_core::builtin_measles_weekly_dataset;
+
+    #[test]
+    fn test_sitrep_svg_masks_pre_suppressed_points_under_nchs_policy() {
+        let mut ds = builtin_measles_weekly_dataset();
+        let last_idx = ds.points.len() - 1;
+        ds.points[last_idx].count = 50.0;
+        ds.points[last_idx].suppressed = true;
+
+        let counts: Vec<f64> = ds.points.iter().map(|p| p.count).collect();
+        let rt_series = compute_cori_rt(&counts, &CoriRtConfig::default());
+        let ab_series = compute_aberrations(&counts, &AberrationConfig::default());
+        let nowcast = nowcast_parametric_delay(&counts, &ParametricNowcastConfig::default());
+        let backtest = run_rolling_wis_backtest_and_ensemble(
+            &counts,
+            &BacktestConfig::default(),
+            &SeirConfig::default(),
+        )
+        .expect("backtest");
+
+        let masked_ctx = SitRepContext {
+            dataset: &ds,
+            suppression_policy: SuppressionPolicy::NchsWonderLe9,
+            rt_series: &rt_series,
+            ab_series: &ab_series,
+            nowcast: &nowcast,
+            backtest: &backtest,
+            spatial_clusters: &[],
+        };
+        let masked_svg = build_incidence_and_aberration_svg(&masked_ctx);
+        let last_rect_masked = masked_svg
+            .lines()
+            .filter(|l| l.contains("<rect "))
+            .last()
+            .expect("masked rect");
+        assert!(
+            last_rect_masked.contains("height=\"0.5\""),
+            "pre-suppressed point must render as masked height 0.5, got {last_rect_masked}"
+        );
+
+        let unmasked_ctx = SitRepContext {
+            suppression_policy: SuppressionPolicy::Unmasked,
+            ..masked_ctx
+        };
+        let unmasked_svg = build_incidence_and_aberration_svg(&unmasked_ctx);
+        let last_rect_unmasked = unmasked_svg
+            .lines()
+            .filter(|l| l.contains("<rect "))
+            .last()
+            .expect("unmasked rect");
+        assert!(
+            !last_rect_unmasked.contains("height=\"0.5\""),
+            "unmasked point must render non-zero bar height, got {last_rect_unmasked}"
+        );
+    }
 }

@@ -37,9 +37,10 @@ use epi_analytics::{
 };
 use epi_core::seed_data::builtin_fda_seed_recalls;
 use epi_core::{
-    builtin_measles_weekly_dataset, builtin_pertussis_spatial_records, pathogen_si_presets,
-    CellValue, JurisdictionRecord, ReactionFacet, RecallRecord, SuppressionPolicy,
-    SurveillanceCampaignPreset, TimeSeriesDataset, VintageMetadata,
+    builtin_measles_weekly_dataset, builtin_pertussis_spatial_records,
+    parse_flexible_date_to_mmwr, pathogen_si_presets, CellValue, JurisdictionRecord,
+    ReactionFacet, RecallRecord, SuppressionPolicy, SurveillanceCampaignPreset, TimeSeriesDataset,
+    VintageMetadata,
 };
 use epi_ingest::{
     export_dataset_csv, export_dataset_json, export_timeseries_as_fhir_r4_bundle,
@@ -51,6 +52,73 @@ use epi_store::{BackfillRevisionDelta, EpiStore};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+
+fn major_step_for_span(span: f64) -> usize {
+    if span > 180.0 {
+        26
+    } else if span > 80.0 {
+        13
+    } else if span > 32.0 {
+        4
+    } else if span > 14.0 {
+        2
+    } else {
+        1
+    }
+}
+
+pub(crate) fn mmwr_week_grid_spacer(
+    input: egui_plot::GridInput,
+    n_pts: usize,
+) -> Vec<egui_plot::GridMark> {
+    let (min_x, max_x) = input.bounds;
+    let span = (max_x - min_x).abs().max(1.0);
+    let major_step = major_step_for_span(span);
+    let minor_step: usize = match major_step {
+        26 => 13,
+        13 => 4,
+        4 => 1,
+        _ => 1,
+    };
+    let start = (min_x.floor() as isize).max(0) as usize;
+    let end = ((max_x.ceil() as isize).max(0) as usize).min(n_pts.saturating_sub(1));
+    let mut marks = Vec::new();
+    for idx in start..=end {
+        if idx % major_step == 0 {
+            marks.push(egui_plot::GridMark {
+                value: idx as f64,
+                step_size: major_step as f64,
+            });
+        } else if minor_step < major_step && idx % minor_step == 0 {
+            marks.push(egui_plot::GridMark {
+                value: idx as f64,
+                step_size: minor_step as f64,
+            });
+        }
+    }
+    marks
+}
+
+pub(crate) fn format_mmwr_axis_mark(
+    mark: egui_plot::GridMark,
+    range: &std::ops::RangeInclusive<f64>,
+    labels: &[String],
+) -> String {
+    let span = (range.end() - range.start()).abs().max(1.0);
+    let major_step = major_step_for_span(span) as f64;
+    if mark.step_size + 1e-6 < major_step {
+        return String::new();
+    }
+    let rounded = mark.value.round();
+    if (mark.value - rounded).abs() > 0.05 || rounded < 0.0 {
+        return String::new();
+    }
+    labels
+        .get(rounded as usize)
+        .cloned()
+        .unwrap_or_default()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DomainPillar {
@@ -211,6 +279,7 @@ pub struct EpiLedgerGuiApp {
     active_window_cutoff_idx: usize,
     global_search_query: String,
     focus_global_search: bool,
+    show_about_modal: bool,
     status_banner: String,
     suppression_policy: SuppressionPolicy,
 
@@ -373,6 +442,7 @@ impl EpiLedgerGuiApp {
                 .default_active_cutoff_idx(),
             global_search_query: String::new(),
             focus_global_search: false,
+            show_about_modal: false,
             status_banner: "Synchronized 5-Domain Surveillance Workbench ready (Active Cohort: US Measles 2022–2026).".to_string(),
             suppression_policy: SuppressionPolicy::Unmasked,
             active_dataset,
@@ -811,7 +881,7 @@ impl EpiLedgerGuiApp {
                 .inner_margin(egui::Margin::symmetric(7.0, 2.0))
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new(format!("{prefix}{badge_txt}]"))
+                        RichText::new(format!("{prefix}{badge_txt}"))
                             .small()
                             .strong()
                             .color(badge_col),
@@ -888,6 +958,13 @@ impl EpiLedgerGuiApp {
                     );
                 } else {
                     ui.heading("--");
+                    if self.cached_rt.estimates.last().is_some() {
+                        ui.label(
+                            RichText::new("Gated (n < 12 cases in window)")
+                                .small()
+                                .weak(),
+                        );
+                    }
                 }
             });
 
@@ -1035,18 +1112,49 @@ impl EpiLedgerGuiApp {
             .map(|p| format!("Active Outbreak Cutoff ({})", p.date_label))
             .unwrap_or_else(|| "Active Outbreak Cutoff".to_string());
 
+        let x_labels: Arc<Vec<String>> = Arc::new(
+            self.active_dataset.points[start_idx..total_pts]
+                .iter()
+                .map(|p| {
+                    p.epiweek
+                        .map(|w| w.compact_label())
+                        .or_else(|| {
+                            parse_flexible_date_to_mmwr(&p.date_label).map(|w| w.compact_label())
+                        })
+                        .unwrap_or_else(|| p.date_label.clone())
+                })
+                .collect(),
+        );
+        let n_vis = total_pts.saturating_sub(start_idx).max(1);
+        let left_end = (n_vis / 3).max(1);
+        let right_start = n_vis.saturating_sub((n_vis / 3).max(1));
+        let mut epi_y_max = 0.0_f64;
+        let mut epi_left_max = 0.0_f64;
+        let mut epi_right_max = 0.0_f64;
+
         for (offset, idx) in (start_idx..total_pts).enumerate() {
             let x = offset as f64;
-            let raw_c = self.active_dataset.points[idx].count;
+            let raw_pt = &self.active_dataset.points[idx];
+            let raw_c = raw_pt.count;
             let disp_c = if self.suppression_policy == SuppressionPolicy::NchsWonderLe9
-                && raw_c > 0.0
-                && raw_c <= 9.0
+                && (raw_pt.suppressed || (raw_c > 0.0 && raw_c <= 9.0))
             {
                 0.0
             } else {
                 raw_c
             };
             let ab = &self.cached_ab.points[idx];
+            let local_peak = disp_c
+                .max(ab.upper_threshold.unwrap_or(0.0))
+                .max(ab.expected_baseline.unwrap_or(0.0));
+            epi_y_max = epi_y_max.max(local_peak);
+            if offset < left_end {
+                epi_left_max = epi_left_max.max(local_peak);
+            }
+            if offset >= right_start {
+                epi_right_max = epi_right_max.max(local_peak);
+            }
+
             if idx < cutoff_idx {
                 let col = if ab.is_alert {
                     Color32::from_rgba_unmultiplied(148, 163, 184, 210)
@@ -1079,101 +1187,196 @@ impl EpiLedgerGuiApp {
             }
         }
 
-        Plot::new("epi_curve_plot")
-            .height(230.0)
-            .legend(Legend::default())
-            .show(ui, |plot_ui| {
-                plot_ui.bar_chart(BarChart::new(hist_bars).name("Historical Baseline Archive"));
-                plot_ui.bar_chart(BarChart::new(active_bars).name("Current / Active Outbreak Window"));
-                if !alert_bars.is_empty() {
-                    plot_ui.bar_chart(BarChart::new(alert_bars).name("Active Outbreak Alert"));
-                }
-                plot_ui.line(
-                    Line::new(PlotPoints::from(exp_pts))
-                        .name("Expected Baseline")
-                        .color(Color32::from_rgb(148, 163, 184)),
+        let avail_h = (ui.clip_rect().bottom() - ui.cursor().top().max(ui.clip_rect().top()))
+            .max(ui.available_height());
+        let usable_h = (avail_h - 10.0).max(425.0);
+        let epi_h = (usable_h * 0.56).max(230.0);
+        let rt_h = (usable_h - epi_h).max(195.0);
+
+        let epi_legend_corner = if epi_left_max <= epi_right_max {
+            egui_plot::Corner::LeftTop
+        } else {
+            egui_plot::Corner::RightTop
+        };
+        let x_labels_epi = Arc::clone(&x_labels);
+        let x_link_id = egui::Id::new("surveillance_x_link");
+
+        let mut epi_plot = Plot::new("epi_curve_plot")
+            .height(epi_h)
+            .legend(
+                Legend::default()
+                    .position(epi_legend_corner)
+                    .background_alpha(0.85),
+            )
+            .link_axis(x_link_id, true, false)
+            .x_grid_spacer(move |input| mmwr_week_grid_spacer(input, n_vis))
+            .x_axis_formatter(move |mark, range| format_mmwr_axis_mark(mark, range, &x_labels_epi));
+        if epi_y_max > 0.0 {
+            epi_plot = epi_plot.include_y(epi_y_max * 1.18);
+        }
+        epi_plot.show(ui, |plot_ui| {
+            plot_ui.bar_chart(BarChart::new(hist_bars).name("Historical Baseline Archive"));
+            plot_ui.bar_chart(BarChart::new(active_bars).name("Current / Active Outbreak Window"));
+            if !alert_bars.is_empty() {
+                plot_ui.bar_chart(BarChart::new(alert_bars).name("Active Outbreak Alert"));
+            }
+            plot_ui.line(
+                Line::new(PlotPoints::from(exp_pts))
+                    .name("Expected Baseline")
+                    .color(Color32::from_rgb(148, 163, 184)),
+            );
+            plot_ui.line(
+                Line::new(PlotPoints::from(upper_pts))
+                    .name("Upper Prediction Threshold")
+                    .color(Color32::from_rgb(245, 158, 11)),
+            );
+            if !alert_pts.is_empty() {
+                plot_ui.points(
+                    Points::new(PlotPoints::from(alert_pts))
+                        .radius(4.5)
+                        .name("Aberration Alert Peak")
+                        .color(Color32::from_rgb(251, 113, 133)),
                 );
-                plot_ui.line(
-                    Line::new(PlotPoints::from(upper_pts))
-                        .name("Upper Prediction Threshold")
-                        .color(Color32::from_rgb(245, 158, 11)),
+            }
+            if let Some(cx) = cutoff_x_opt {
+                plot_ui.vline(
+                    VLine::new(cx)
+                        .name(cutoff_label.clone())
+                        .color(Color32::from_rgb(251, 191, 36))
+                        .width(2.0),
                 );
-                if !alert_pts.is_empty() {
-                    plot_ui.points(
-                        Points::new(PlotPoints::from(alert_pts))
-                            .radius(4.5)
-                            .name("Aberration Alert Peak")
-                            .color(Color32::from_rgb(251, 113, 133)),
-                    );
-                }
-                if let Some(cx) = cutoff_x_opt {
-                    plot_ui.vline(
-                        VLine::new(cx)
-                            .name(cutoff_label.clone())
-                            .color(Color32::from_rgb(251, 191, 36))
-                            .width(2.0),
-                    );
-                }
-            });
+            }
+        });
 
         ui.add_space(6.0);
 
-        let mut rt_hist_pts = Vec::new();
-        let mut rt_mean_pts = Vec::new();
-        let mut rt_low_pts = Vec::new();
-        let mut rt_high_pts = Vec::new();
+        let mut rt_hist_segs: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut rt_mean_segs: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut rt_low_segs: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut rt_high_segs: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut cur_hist: Vec<[f64; 2]> = Vec::new();
+        let mut cur_mean: Vec<[f64; 2]> = Vec::new();
+        let mut cur_low: Vec<[f64; 2]> = Vec::new();
+        let mut cur_high: Vec<[f64; 2]> = Vec::new();
+        let mut prev_hist_pt: Option<[f64; 2]> = None;
+
+        let mut rt_y_max = 1.5_f64;
+        let mut rt_left_max = 1.0_f64;
+        let mut rt_right_max = 1.0_f64;
+
         for (offset, idx) in (start_idx..total_pts).enumerate() {
             if let Some(est) = self.cached_rt.estimates[idx] {
                 let x = offset as f64;
+                let mean_y = est.mean.min(8.0);
+                let low_y = est.cri_low_95.min(8.0);
+                let high_y = est.cri_high_95.min(8.0);
+                let local_peak = mean_y.max(high_y);
+                rt_y_max = rt_y_max.max(local_peak);
+                if offset < left_end {
+                    rt_left_max = rt_left_max.max(local_peak);
+                }
+                if offset >= right_start {
+                    rt_right_max = rt_right_max.max(local_peak);
+                }
+
                 if idx < cutoff_idx {
-                    rt_hist_pts.push([x, est.mean.min(8.0)]);
+                    let pt = [x, mean_y];
+                    cur_hist.push(pt);
+                    prev_hist_pt = Some(pt);
                 } else {
-                    if rt_mean_pts.is_empty() && !rt_hist_pts.is_empty() {
-                        if let Some(&prev) = rt_hist_pts.last() {
-                            rt_mean_pts.push(prev);
+                    if cur_mean.is_empty() {
+                        if let Some(prev) = prev_hist_pt.take() {
+                            cur_mean.push(prev);
                         }
                     }
-                    rt_mean_pts.push([x, est.mean.min(8.0)]);
+                    cur_mean.push([x, mean_y]);
                 }
-                rt_low_pts.push([x, est.cri_low_95.min(8.0)]);
-                rt_high_pts.push([x, est.cri_high_95.min(8.0)]);
+                cur_low.push([x, low_y]);
+                cur_high.push([x, high_y]);
+            } else {
+                prev_hist_pt = None;
+                if !cur_hist.is_empty() {
+                    rt_hist_segs.push(std::mem::take(&mut cur_hist));
+                }
+                if !cur_mean.is_empty() {
+                    rt_mean_segs.push(std::mem::take(&mut cur_mean));
+                }
+                if !cur_low.is_empty() {
+                    rt_low_segs.push(std::mem::take(&mut cur_low));
+                }
+                if !cur_high.is_empty() {
+                    rt_high_segs.push(std::mem::take(&mut cur_high));
+                }
             }
         }
+        if !cur_hist.is_empty() {
+            rt_hist_segs.push(cur_hist);
+        }
+        if !cur_mean.is_empty() {
+            rt_mean_segs.push(cur_mean);
+        }
+        if !cur_low.is_empty() {
+            rt_low_segs.push(cur_low);
+        }
+        if !cur_high.is_empty() {
+            rt_high_segs.push(cur_high);
+        }
 
+        let rt_legend_corner = if rt_left_max <= rt_right_max {
+            egui_plot::Corner::LeftTop
+        } else {
+            egui_plot::Corner::RightTop
+        };
+        let x_labels_rt = Arc::clone(&x_labels);
         let max_x = (total_pts.saturating_sub(start_idx).max(1)) as f64;
         let eq_pts = vec![[0.0, 1.0], [max_x, 1.0]];
         Plot::new("cori_rt_plot")
-            .height(195.0)
-            .legend(Legend::default())
+            .height(rt_h)
+            .legend(
+                Legend::default()
+                    .position(rt_legend_corner)
+                    .background_alpha(0.85),
+            )
+            .include_y((rt_y_max * 1.18).max(2.0))
+            .link_axis(x_link_id, true, false)
+            .x_grid_spacer(move |input| mmwr_week_grid_spacer(input, n_vis))
+            .x_axis_formatter(move |mark, range| format_mmwr_axis_mark(mark, range, &x_labels_rt))
+            .x_axis_label("MMWR Week (YYYY-Www)")
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(PlotPoints::from(eq_pts))
                         .name("Equilibrium Rt = 1.0")
                         .color(Color32::from_rgb(16, 185, 129)),
                 );
-                if !rt_hist_pts.is_empty() {
+                for seg in rt_hist_segs {
                     plot_ui.line(
-                        Line::new(PlotPoints::from(rt_hist_pts))
+                        Line::new(PlotPoints::from(seg))
                             .name("Baseline Archive Rt")
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
                 }
-                plot_ui.line(
-                    Line::new(PlotPoints::from(rt_mean_pts))
-                        .name("Active Outbreak Mean Rt")
-                        .color(Color32::from_rgb(34, 211, 238))
-                        .width(2.0),
-                );
-                plot_ui.line(
-                    Line::new(PlotPoints::from(rt_high_pts))
-                        .name("95% CrI Upper")
-                        .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
-                );
-                plot_ui.line(
-                    Line::new(PlotPoints::from(rt_low_pts))
-                        .name("95% CrI Lower")
-                        .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
-                );
+                for seg in rt_mean_segs {
+                    plot_ui.line(
+                        Line::new(PlotPoints::from(seg))
+                            .name("Active Outbreak Mean Rt")
+                            .color(Color32::from_rgb(34, 211, 238))
+                            .width(2.0),
+                    );
+                }
+                for seg in rt_high_segs {
+                    plot_ui.line(
+                        Line::new(PlotPoints::from(seg))
+                            .name("95% CrI Upper")
+                            .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
+                    );
+                }
+                for seg in rt_low_segs {
+                    plot_ui.line(
+                        Line::new(PlotPoints::from(seg))
+                            .name("95% CrI Lower")
+                            .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
+                    );
+                }
                 if let Some(cx) = cutoff_x_opt {
                     plot_ui.vline(
                         VLine::new(cx)
@@ -2526,7 +2729,25 @@ impl EpiLedgerGuiApp {
                 if self.worker_busy {
                     ui.spinner();
                 }
-                ui.label(RichText::new(&self.status_banner).small().monospace());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("About").clicked() {
+                        self.show_about_modal = true;
+                    }
+                    ui.separator();
+                    ui.label(
+                        RichText::new("Copyright CRV Science Network")
+                            .small()
+                            .weak(),
+                    );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&self.status_banner).small().monospace(),
+                            )
+                            .truncate(),
+                        );
+                    });
+                });
             });
         });
 
@@ -2582,6 +2803,7 @@ impl EpiLedgerGuiApp {
                         ui,
                         &self.store,
                         &self.active_dataset,
+                        self.suppression_policy,
                         &mut self.status_banner,
                     );
                     if let Some(dp_ds) = act.commit_dp_vintage {
@@ -2645,6 +2867,42 @@ impl EpiLedgerGuiApp {
                 ActiveTab::VintageLedger => self.render_vintage_ledger_tab(ui),
             });
         });
+
+        if self.show_about_modal {
+            let mut open = self.show_about_modal;
+            egui::Window::new("About EpiLedger")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.heading("EpiLedger");
+                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                    ui.separator();
+                    ui.label(
+                        "Native Rust public health informatics workbench for outbreak surveillance, Cori Rt, Farrington/EARS aberrations, reporting-delay nowcasting, wastewater deconvolution, and differential privacy auditing.",
+                    );
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Copyright CRV Science Network").strong());
+                    ui.label("License: GNU General Public License v3.0 or later (GPL-3.0-or-later)");
+                    ui.add_space(4.0);
+                    ui.hyperlink_to(
+                        "CRV Science Network — https://crvscience.com",
+                        "https://crvscience.com",
+                    );
+                    ui.hyperlink_to(
+                        "CRV Science Apps — https://crvscience.com/apps",
+                        "https://crvscience.com/apps",
+                    );
+                    ui.add_space(8.0);
+                    if ui.button("Close").clicked() {
+                        self.show_about_modal = false;
+                    }
+                });
+            if !open {
+                self.show_about_modal = false;
+            }
+        }
     }
 }
 
@@ -2653,7 +2911,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn campaign_preset_synchronizes_all_modules_and_5_domain_tabs_render() {
+    fn campaign_preset_synchronizes_all_modules_and_all_16_tabs_render() {
         let ctx = egui::Context::default();
         let mut app = EpiLedgerGuiApp::new_headless(&ctx, PathBuf::from(":memory:"));
 
@@ -2667,13 +2925,54 @@ mod tests {
         }
 
         app.global_search_query = "TX".to_string();
-        for pillar in DomainPillar::ALL {
-            if let Some(&(first_tab, _)) = pillar.sub_tabs().first() {
-                app.active_tab = first_tab;
-                let _ = ctx.run(egui::RawInput::default(), |c| {
-                    app.update_ui(c);
-                });
-            }
+        for &(tab, _, _) in &ActiveTab::ALL_SEARCHABLE {
+            app.active_tab = tab;
+            let _ = ctx.run(egui::RawInput::default(), |c| {
+                app.update_ui(c);
+            });
         }
+    }
+
+    #[test]
+    fn test_mmwr_x_axis_formatter_and_about_modal() {
+        let labels: Vec<String> = (1..=253)
+            .map(|i| format!("{}-W{:02}", 2022 + (i - 1) / 52, ((i - 1) % 52) + 1))
+            .collect();
+        let marks = mmwr_week_grid_spacer(
+            egui_plot::GridInput {
+                bounds: (0.0, 252.0),
+                base_step_size: 10.0,
+            },
+            labels.len(),
+        );
+        assert!(marks.iter().any(|m| m.value == 0.0 && m.step_size == 26.0));
+        assert!(marks.iter().any(|m| m.value == 26.0 && m.step_size == 26.0));
+        let major_lbl = format_mmwr_axis_mark(
+            egui_plot::GridMark {
+                value: 26.0,
+                step_size: 26.0,
+            },
+            &(0.0..=252.0),
+            &labels,
+        );
+        assert_eq!(major_lbl, "2022-W27");
+        let minor_lbl = format_mmwr_axis_mark(
+            egui_plot::GridMark {
+                value: 13.0,
+                step_size: 13.0,
+            },
+            &(0.0..=252.0),
+            &labels,
+        );
+        assert!(minor_lbl.is_empty(), "minor ticks must not emit overlapping labels");
+
+        let ctx = egui::Context::default();
+        let mut app = EpiLedgerGuiApp::new_headless(&ctx, PathBuf::from(":memory:"));
+        assert!(!app.show_about_modal);
+        app.show_about_modal = true;
+        let out = ctx.run(egui::RawInput::default(), |c| {
+            app.update_ui(c);
+        });
+        assert!(!out.shapes.is_empty());
     }
 }

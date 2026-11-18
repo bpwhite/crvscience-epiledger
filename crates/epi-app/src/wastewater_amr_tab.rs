@@ -395,6 +395,14 @@ impl WastewaterAmrWorkbenchState {
                         .desired_width(240.0)
                         .hint_text("path/to/wastewater_snv_barcodes.csv"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.ww_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Import Wastewater CSV").clicked() {
                     match std::fs::read_to_string(self.ww_csv_path.trim()) {
                         Ok(raw) => match parse_wastewater_snv_csv(&raw) {
@@ -432,17 +440,56 @@ impl WastewaterAmrWorkbenchState {
         ui.add_space(6.0);
 
         ui.columns(2, |cols| {
+            let n_ww = self.ww_result.samples.len().max(1);
+            let mut ab_y_max = 0.0_f64;
+            let mut ab_left_max = 0.0_f64;
+            let mut ab_right_max = 0.0_f64;
+            let mut cp_y_max = 0.0_f64;
+            let mut cp_left_max = 0.0_f64;
+            let mut cp_right_max = 0.0_f64;
+            let left_end = (n_ww / 3).max(1);
+            let right_start = n_ww.saturating_sub((n_ww / 3).max(1));
+            for (idx, s) in self.ww_result.samples.iter().enumerate() {
+                for l in &s.lineages {
+                    let pct = l.abundance * 100.0;
+                    ab_y_max = ab_y_max.max(pct);
+                    cp_y_max = cp_y_max.max(l.viral_load_weighted_copies);
+                    if idx < left_end {
+                        ab_left_max = ab_left_max.max(pct);
+                        cp_left_max = cp_left_max.max(l.viral_load_weighted_copies);
+                    }
+                    if idx >= right_start {
+                        ab_right_max = ab_right_max.max(pct);
+                        cp_right_max = cp_right_max.max(l.viral_load_weighted_copies);
+                    }
+                }
+            }
+            let ab_corner = if ab_left_max <= ab_right_max {
+                egui_plot::Corner::LeftTop
+            } else {
+                egui_plot::Corner::RightTop
+            };
+            let cp_corner = if cp_left_max <= cp_right_max {
+                egui_plot::Corner::LeftTop
+            } else {
+                egui_plot::Corner::RightTop
+            };
+
             cols[0].group(|ui| {
                 ui.label(
                     RichText::new("Longitudinal Sewage Lineage Abundance Trajectories (%)")
                         .strong(),
                 );
-                Plot::new("ww_longitudinal_abundance_plot")
+                let mut plot = Plot::new("ww_longitudinal_abundance_plot")
                     .height(235.0)
-                    .legend(Legend::default())
+                    .legend(Legend::default().position(ab_corner).background_alpha(0.85))
                     .x_axis_label("Sampling Week Index")
                     .y_axis_label("Deconvolved Lineage Share (%)")
-                    .show(ui, |plot_ui| {
+                    .include_y(0.0);
+                if ab_y_max > 0.0 {
+                    plot = plot.include_y((ab_y_max * 1.72).min(100.0).max(ab_y_max * 1.15));
+                }
+                plot.show(ui, |plot_ui| {
                         for (k_idx, lin_name) in self.ww_result.lineage_names.iter().enumerate() {
                             let pts: Vec<[f64; 2]> = self
                                 .ww_result
@@ -471,12 +518,13 @@ impl WastewaterAmrWorkbenchState {
                 ui.label(
                     RichText::new("Viral-Load-Weighted Lineage Signal (Gene Copies / L)").strong(),
                 );
-                Plot::new("ww_viral_copies_plot")
+                let mut plot = Plot::new("ww_viral_copies_plot")
                     .height(235.0)
-                    .legend(Legend::default())
+                    .legend(Legend::default().position(cp_corner).background_alpha(0.85))
                     .x_axis_label("Sampling Week Index")
                     .y_axis_label("Lineage Copies / L")
                     .y_axis_min_width(58.0)
+                    .include_y(0.0)
                     .y_axis_formatter(|mark, _range| {
                         let v = mark.value;
                         if v.abs() >= 1_000_000.0 {
@@ -491,8 +539,11 @@ impl WastewaterAmrWorkbenchState {
                         } else {
                             format!("{:.0}", v)
                         }
-                    })
-                    .show(ui, |plot_ui| {
+                    });
+                if cp_y_max > 0.0 {
+                    plot = plot.include_y(cp_y_max * 1.24);
+                }
+                plot.show(ui, |plot_ui| {
                         for (k_idx, lin_name) in self.ww_result.lineage_names.iter().enumerate() {
                             let pts: Vec<[f64; 2]> = self
                                 .ww_result
@@ -801,6 +852,14 @@ impl WastewaterAmrWorkbenchState {
                         .desired_width(210.0)
                         .hint_text("path/to/amr_isolates.csv"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.amr_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Import AMR CSV").clicked() {
                     match std::fs::read_to_string(self.amr_csv_path.trim()) {
                         Ok(raw) => match parse_amr_isolates_csv(&raw) {

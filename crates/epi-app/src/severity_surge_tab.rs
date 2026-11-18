@@ -287,6 +287,14 @@ impl SeveritySurgeWorkbenchState {
                         .desired_width(225.0)
                         .hint_text("path/to/cases_and_deaths.csv"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.cfr_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Import CFR CSV").clicked() {
                     match std::fs::read_to_string(self.cfr_csv_path.trim()) {
                         Ok(raw) => match parse_cfr_incidence_deaths_csv(&raw) {

@@ -376,6 +376,14 @@ impl GenomicWorkbenchState {
                         .desired_width(260.0)
                         .hint_text("path/to/clade_counts.csv (wide or tidy long)"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.lineage_csv_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Load Clade CSV").clicked() {
                     let p = self.lineage_csv_path.trim().to_string();
                     match std::fs::read_to_string(&p)
@@ -472,16 +480,22 @@ impl GenomicWorkbenchState {
                             );
                             for (k, cname) in res.clade_names.iter().enumerate() {
                                 let col = CLADE_PALETTE[k % CLADE_PALETTE.len()];
-                                let rt_pts: Vec<[f64; 2]> = res
-                                    .timeline
-                                    .iter()
-                                    .filter_map(|pt| {
-                                        pt.variant_rt[k].map(|est| [pt.step_index as f64, est.mean])
-                                    })
-                                    .collect();
-                                if !rt_pts.is_empty() {
+                                let mut seg: Vec<[f64; 2]> = Vec::new();
+                                for pt in &res.timeline {
+                                    if let Some(est) = pt.variant_rt[k] {
+                                        seg.push([pt.step_index as f64, est.mean]);
+                                    } else if !seg.is_empty() {
+                                        plot_ui.line(
+                                            Line::new(PlotPoints::from(std::mem::take(&mut seg)))
+                                                .name(format!("{cname} Rt"))
+                                                .color(col)
+                                                .width(2.0),
+                                        );
+                                    }
+                                }
+                                if !seg.is_empty() {
                                     plot_ui.line(
-                                        Line::new(PlotPoints::from(rt_pts))
+                                        Line::new(PlotPoints::from(seg))
                                             .name(format!("{cname} Rt"))
                                             .color(col)
                                             .width(2.0),
@@ -627,12 +641,28 @@ impl GenomicWorkbenchState {
                         .desired_width(170.0)
                         .hint_text("aligned_isolates.fasta"),
                 );
+                if ui.button("Browse FASTA...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("FASTA", &["fasta", "fa", "fna", "txt"])
+                        .pick_file()
+                    {
+                        self.fasta_path_input = p.display().to_string();
+                    }
+                }
                 ui.label("Metadata CSV:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.metadata_path_input)
                         .desired_width(170.0)
                         .hint_text("onset_line_list.csv"),
                 );
+                if ui.button("Browse Meta...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.metadata_path_input = p.display().to_string();
+                    }
+                }
                 if ui.button("Load FASTA + Line List").clicked() {
                     let fa_p = self.fasta_path_input.trim().to_string();
                     let me_p = self.metadata_path_input.trim().to_string();
@@ -671,6 +701,19 @@ impl GenomicWorkbenchState {
                         .desired_width(120.0)
                         .hint_text("export_prefix"),
                 );
+                if ui.button("Save As...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .set_file_name("outbreak_tree")
+                        .save_file()
+                    {
+                        let s = p.display().to_string();
+                        let stripped = s
+                            .strip_suffix(".nwk")
+                            .or_else(|| s.strip_suffix(".dot"))
+                            .unwrap_or(&s);
+                        self.export_prefix_input = stripped.to_string();
+                    }
+                }
                 if ui.button("Export .nwk + .dot").clicked() {
                     if let Some(ref tree) = self.cached_tree {
                         let pref = self.export_prefix_input.trim();

@@ -19,10 +19,12 @@ pub mod pprl_bloom;
 
 pub use bitemporal::{BackfillRevisionDelta, CachedHttpPayload, EpiStore};
 pub use dp_and_audit::{
-    append_audit_event, compute_audit_entry_hash, get_vintage_spent_epsilon, list_audit_events,
-    list_dp_budget_entries, release_differentially_private_series, reset_vintage_dp_budget,
-    verify_audit_chain, AuditChainVerification, AuditLogEntry, DpBudgetLedgerEntry,
-    DpReleaseConfig, DpReleaseOutcome, GENESIS_PREV_HASH,
+    append_audit_event, compute_audit_entry_hash, get_vintage_spent_epsilon,
+    get_vintage_spent_rho, list_audit_events, list_dp_budget_entries,
+    release_differentially_private_series, release_discrete_gaussian_zcdp_series,
+    reset_vintage_dp_budget, sample_discrete_gaussian_ctr, verify_audit_chain,
+    zcdp_rho_to_epsilon, AuditChainVerification, AuditLogEntry, DpBudgetLedgerEntry,
+    DpReleaseConfig, DpReleaseOutcome, ZcdpReleaseConfig, ZcdpReleaseOutcome, GENESIS_PREV_HASH,
 };
 pub use pprl_bloom::{
     builtin_pprl_hospital_lab_records, encode_pprl_record, generate_synthetic_pprl_scale_benchmark,

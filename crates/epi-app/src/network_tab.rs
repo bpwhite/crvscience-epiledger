@@ -335,6 +335,14 @@ impl SuperspreadingWorkbenchState {
                         .desired_width(210.0)
                         .hint_text("path/to/contact_pairs.csv"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.csv_path_input = p.display().to_string();
+                    }
+                }
                 if ui.button("Import Line-List CSV").clicked() {
                     match std::fs::read_to_string(self.csv_path_input.trim()) {
                         Ok(raw) => match parse_contact_tracing_csv(&raw) {
@@ -384,6 +392,15 @@ impl SuperspreadingWorkbenchState {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.dot_export_path).desired_width(165.0),
                 );
+                if ui.button("Save As...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("Graphviz DOT", &["dot", "gv"])
+                        .set_file_name("contact_network.dot")
+                        .save_file()
+                    {
+                        self.dot_export_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Export .DOT").clicked() {
                     let dot = export_bipartite_network_dot(&self.analysis, &self.records);
                     match std::fs::write(self.dot_export_path.trim(), dot) {

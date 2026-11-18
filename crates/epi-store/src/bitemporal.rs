@@ -114,7 +114,11 @@ impl EpiStore {
                     cumulative_epsilon_after REAL NOT NULL,
                     max_budget_cap           REAL NOT NULL,
                     empirical_mae            REAL NOT NULL,
-                    output_checksum_hex      TEXT NOT NULL
+                    output_checksum_hex      TEXT NOT NULL,
+                    entry_kind               TEXT NOT NULL DEFAULT 'RELEASE',
+                    mechanism                TEXT NOT NULL DEFAULT 'DISCRETE_LAPLACE',
+                    zcdp_rho_spent           REAL NOT NULL DEFAULT 0.0,
+                    cumulative_rho_after     REAL NOT NULL DEFAULT 0.0
                 );
 
                 CREATE TABLE IF NOT EXISTS audit_hash_chain (
@@ -127,6 +131,63 @@ impl EpiStore {
                     prev_hash_hex     TEXT NOT NULL,
                     entry_hash_hex    TEXT NOT NULL
                 );
+                ",
+            )
+            .map_err(|e| EpiError::Storage(e.to_string()))?;
+
+        // Migrate pre-v2.0 dp_budget_ledger tables before creating triggers
+        let mut cols = std::collections::HashSet::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(dp_budget_ledger)")
+                .map_err(|e| EpiError::Storage(e.to_string()))?;
+            let iter = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| EpiError::Storage(e.to_string()))?;
+            for c in iter {
+                cols.insert(c.map_err(|e| EpiError::Storage(e.to_string()))?);
+            }
+        }
+        let migrations = [
+            ("entry_kind", "ALTER TABLE dp_budget_ledger ADD COLUMN entry_kind TEXT NOT NULL DEFAULT 'RELEASE'"),
+            ("mechanism", "ALTER TABLE dp_budget_ledger ADD COLUMN mechanism TEXT NOT NULL DEFAULT 'DISCRETE_LAPLACE'"),
+            ("zcdp_rho_spent", "ALTER TABLE dp_budget_ledger ADD COLUMN zcdp_rho_spent REAL NOT NULL DEFAULT 0.0"),
+            ("cumulative_rho_after", "ALTER TABLE dp_budget_ledger ADD COLUMN cumulative_rho_after REAL NOT NULL DEFAULT 0.0"),
+        ];
+        for (col_name, ddl) in migrations {
+            if !cols.contains(col_name) {
+                self.conn
+                    .execute(ddl, [])
+                    .map_err(|e| EpiError::Storage(e.to_string()))?;
+            }
+        }
+
+        // Strictly enforce append-only immutability on dp_budget_ledger (audit_hash_chain remains
+        // testable for external tamper detection in headless_validation).
+        self.conn
+            .execute_batch(
+                "
+                CREATE TRIGGER IF NOT EXISTS dp_budget_ledger_no_delete
+                BEFORE DELETE ON dp_budget_ledger
+                BEGIN
+                    SELECT RAISE(ABORT, 'dp_budget_ledger is strictly append-only: DELETE is forbidden');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS dp_budget_ledger_no_update
+                BEFORE UPDATE ON dp_budget_ledger
+                BEGIN
+                    SELECT RAISE(ABORT, 'dp_budget_ledger is strictly append-only: UPDATE is forbidden');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS dp_budget_ledger_no_replace
+                BEFORE INSERT ON dp_budget_ledger
+                WHEN NEW.entry_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM dp_budget_ledger WHERE entry_id = NEW.entry_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'dp_budget_ledger is strictly append-only: REPLACE is forbidden');
+                END;
                 ",
             )
             .map_err(|e| EpiError::Storage(e.to_string()))?;

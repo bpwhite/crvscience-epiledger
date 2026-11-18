@@ -277,6 +277,14 @@ impl ElrPprlSeroWorkbenchState {
                         .desired_width(190.0)
                         .hint_text("batch_messages.hl7"),
                 );
+                if ui.button("Browse...").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("HL7 v2 Messages", &["hl7", "txt"])
+                        .pick_file()
+                    {
+                        self.hl7_file_path = p.display().to_string();
+                    }
+                }
                 if ui.button("Import .hl7 File").clicked() {
                     let p = self.hl7_file_path.trim().to_string();
                     match import_hl7_v2_file(&p, &self.pprl_cfg, self.hl7_dedup_enabled) {
@@ -632,6 +640,14 @@ impl ElrPprlSeroWorkbenchState {
                             .desired_width(155.0)
                             .hint_text("serosurvey_strata.csv"),
                     );
+                    if ui.button("Browse...").clicked() {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .add_filter("CSV / TSV", &["csv", "tsv", "txt"])
+                            .pick_file()
+                        {
+                            self.sero_csv_path = p.display().to_string();
+                        }
+                    }
                     if ui.button("Load Sero CSV").clicked() {
                         let p = self.sero_csv_path.trim().to_string();
                         match std::fs::read_to_string(&p)
