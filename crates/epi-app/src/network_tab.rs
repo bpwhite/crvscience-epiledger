@@ -449,18 +449,18 @@ impl SuperspreadingWorkbenchState {
                             Line::new(PlotPoints::from(theo_pts))
                                 .name(format!("Lloyd-Smith NB Theory (k={:.2})", off.k_mle))
                                 .color(Color32::from_rgb(56, 189, 248))
-                                .width(2.4),
+                                .width(2.4_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(emp_pts))
                                 .name("Observed Line-List Lorenz")
                                 .color(Color32::from_rgb(244, 63, 94))
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(diag_pts))
                                 .name("Homogeneous Equality (k -> inf)")
-                                .stroke(Stroke::new(1.2, Color32::from_rgb(148, 163, 184))),
+                                .stroke(Stroke::new(1.2_f32, Color32::from_rgb(148, 163, 184))),
                         );
                     });
             });
@@ -504,13 +504,13 @@ impl SuperspreadingWorkbenchState {
                                 Line::new(PlotPoints::from(nb_line))
                                     .name("Fitted Negative Binomial")
                                     .color(Color32::from_rgb(52, 211, 153))
-                                    .width(2.4),
+                                    .width(2.4_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(pois_line))
                                     .name("Homogeneous Poisson")
                                     .color(Color32::from_rgb(251, 191, 36))
-                                    .width(1.8),
+                                    .width(1.8_f32),
                             );
                         });
                 }
@@ -536,7 +536,7 @@ impl SuperspreadingWorkbenchState {
                                 Line::new(PlotPoints::from(ll_pts))
                                     .name("Relative Profile Log-Likelihood")
                                     .color(Color32::from_rgb(167, 139, 250))
-                                    .width(2.4),
+                                    .width(2.4_f32),
                             );
                             plot_ui.hline(
                                 HLine::new(-1.920729)

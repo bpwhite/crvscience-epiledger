@@ -263,7 +263,7 @@ impl EpiStore {
 
         tx.commit().map_err(|e| EpiError::Storage(e.to_string()))?;
 
-        let _ = append_audit_event_on_conn(
+        append_audit_event_on_conn(
             &self.conn,
             "epi-store",
             "COMMIT_VINTAGE",
@@ -274,7 +274,7 @@ impl EpiStore {
                 dataset.points.len(),
                 dataset.checksum_hex
             ),
-        );
+        )?;
 
         Ok(())
     }

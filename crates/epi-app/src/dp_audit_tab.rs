@@ -677,8 +677,10 @@ impl DpAuditWorkbenchState {
                         b.summary.total_cartesian_pairs
                     ));
                     ui.monospace(format!(
-                        "Blocked Candidate Pairs      : {} pairs ({:.1}% pruned)",
-                        b.summary.evaluated_candidate_pairs, b.summary.blocking_pair_reduction_pct
+                        "{} Candidate Pairs      : {} pairs ({:.1}% pruned)",
+                        if b.used_blocking { "Blocked" } else { "All" },
+                        b.summary.evaluated_candidate_pairs,
+                        b.summary.blocking_pair_reduction_pct
                     ));
                     ui.monospace(format!(
                         "Recovered Unique Entities    : {} (expected {})",

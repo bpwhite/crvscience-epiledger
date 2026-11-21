@@ -165,10 +165,6 @@ impl GenomicWorkbenchState {
         let _ = self.recompute_lineage();
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, status_banner: &mut String) {
-        self.render_with_filter(ui, status_banner, "");
-    }
-
     pub fn render_with_filter(
         &mut self,
         ui: &mut egui::Ui,
@@ -442,7 +438,7 @@ impl GenomicWorkbenchState {
                                     Line::new(PlotPoints::from(fit_vec))
                                         .name(cname)
                                         .color(col)
-                                        .width(2.0),
+                                        .width(2.0_f32),
                                 );
 
                                 let obs_pts: Vec<[f64; 2]> = res
@@ -458,7 +454,7 @@ impl GenomicWorkbenchState {
                                         Points::new(PlotPoints::from(obs_pts))
                                             .name(format!("{cname} obs"))
                                             .color(col)
-                                            .radius(3.0),
+                                            .radius(3.0_f32),
                                     );
                                 }
                             }
@@ -476,7 +472,7 @@ impl GenomicWorkbenchState {
                                 Line::new(PlotPoints::from(vec![[0.0, 1.0], [max_x, 1.0]]))
                                     .name("Rt = 1.0 threshold")
                                     .color(Color32::from_gray(130))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             for (k, cname) in res.clade_names.iter().enumerate() {
                                 let col = CLADE_PALETTE[k % CLADE_PALETTE.len()];
@@ -489,7 +485,7 @@ impl GenomicWorkbenchState {
                                             Line::new(PlotPoints::from(std::mem::take(&mut seg)))
                                                 .name(format!("{cname} Rt"))
                                                 .color(col)
-                                                .width(2.0),
+                                                .width(2.0_f32),
                                         );
                                     }
                                 }
@@ -498,7 +494,7 @@ impl GenomicWorkbenchState {
                                         Line::new(PlotPoints::from(seg))
                                             .name(format!("{cname} Rt"))
                                             .color(col)
-                                            .width(2.0),
+                                            .width(2.0_f32),
                                     );
                                 }
                             }
@@ -995,7 +991,7 @@ impl GenomicWorkbenchState {
 
                         if e.unsampled_intermediates > 0 {
                             let mid_pt = Pos2::new(mid_x, p_dst.y);
-                            painter.circle_stroke(mid_pt, 4.5, Stroke::new(1.5, edge_col));
+                            painter.circle_stroke(mid_pt, 4.5, Stroke::new(1.5_f32, edge_col));
                         }
                     }
                 }
@@ -1009,7 +1005,7 @@ impl GenomicWorkbenchState {
                         CLADE_PALETTE[(e.cluster_id.saturating_sub(1)) % CLADE_PALETTE.len()]
                     };
                     painter.circle_filled(pt, 5.5, fill);
-                    painter.circle_stroke(pt, 5.5, Stroke::new(1.0, Color32::WHITE));
+                    painter.circle_stroke(pt, 5.5, Stroke::new(1.0_f32, Color32::WHITE));
                     painter.text(
                         Pos2::new(pt.x + 8.0, pt.y),
                         egui::Align2::LEFT_CENTER,

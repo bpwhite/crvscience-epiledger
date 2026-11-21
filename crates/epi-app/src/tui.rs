@@ -254,15 +254,18 @@ impl EpiTuiState {
         cfg.epsilon = 0.50;
         match release_differentially_private_series(&self.store, &self.active_dataset, &cfg) {
             Ok(out) => {
-                let _ = self.store.commit_vintage(&out.noisy_dataset);
-                self.refresh_governance();
-                if let Ok(list) = self.store.list_vintages() {
-                    self.vintages = list;
+                if let Err(e) = self.store.commit_vintage(&out.noisy_dataset) {
+                    self.status_line = format!("DP vintage commit failed: {e}");
+                } else {
+                    self.refresh_governance();
+                    if let Ok(list) = self.store.list_vintages() {
+                        self.vintages = list;
+                    }
+                    self.status_line = format!(
+                        "Committed Discrete Laplace DP vintage '{}' (eps=0.50, empirical RMSE={:.2}, spent={:.2}).",
+                        out.noisy_dataset.vintage_id, out.empirical_rmse, out.cumulative_epsilon_for_vintage
+                    );
                 }
-                self.status_line = format!(
-                    "Committed Discrete Laplace DP vintage '{}' (eps=0.50, empirical RMSE={:.2}, spent={:.2}).",
-                    out.noisy_dataset.vintage_id, out.empirical_rmse, out.cumulative_epsilon_for_vintage
-                );
             }
             Err(e) => {
                 self.status_line = format!("DP budget guardrail blocked release: {e}");

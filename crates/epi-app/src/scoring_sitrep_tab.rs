@@ -345,37 +345,37 @@ impl ScoringSitrepWorkbenchState {
                                 Line::new(PlotPoints::from(obs_line))
                                     .name("Observed Incidence")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.8),
+                                    .width(1.8_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(ens_med))
                                     .name("Inverse-WIS Median")
                                     .color(Color32::from_rgb(52, 211, 153))
-                                    .width(2.5),
+                                    .width(2.5_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(ens_lo95))
                                     .name("Ensemble 95% Low")
                                     .color(Color32::from_rgb(56, 189, 248))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(ens_hi95))
                                     .name("Ensemble 95% High")
                                     .color(Color32::from_rgb(56, 189, 248))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(seir_m))
                                     .name("SEIR Constituent")
                                     .color(Color32::from_rgb(251, 191, 36))
-                                    .width(1.3),
+                                    .width(1.3_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(ren_m))
                                     .name("Renewal Constituent")
                                     .color(Color32::from_rgb(244, 114, 182))
-                                    .width(1.3),
+                                    .width(1.3_f32),
                             );
                         });
                 });

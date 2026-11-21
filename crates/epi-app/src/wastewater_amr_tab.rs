@@ -179,10 +179,6 @@ impl WastewaterAmrWorkbenchState {
         let _ = self.recompute_wastewater();
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, status_banner: &mut String) -> Phase10GuiAction {
-        self.render_with_filter(ui, status_banner, "")
-    }
-
     pub fn render_with_filter(
         &mut self,
         ui: &mut egui::Ui,
@@ -508,7 +504,7 @@ impl WastewaterAmrWorkbenchState {
                                 Line::new(PlotPoints::from(pts))
                                     .name(lin_name)
                                     .color(LINEAGE_COLORS[k_idx % LINEAGE_COLORS.len()])
-                                    .width(2.5),
+                                    .width(2.5_f32),
                             );
                         }
                     });
@@ -562,7 +558,7 @@ impl WastewaterAmrWorkbenchState {
                                 Line::new(PlotPoints::from(pts))
                                     .name(lin_name)
                                     .color(LINEAGE_COLORS[k_idx % LINEAGE_COLORS.len()])
-                                    .width(2.3),
+                                    .width(2.3_f32),
                             );
                         }
                     });

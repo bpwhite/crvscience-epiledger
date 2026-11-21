@@ -746,7 +746,7 @@ impl CrcSyndromicWorkbenchState {
                             Line::new(PlotPoints::from(pts))
                                 .name(self.selected_syndrome.code())
                                 .color(Color32::from_rgb(56, 189, 248))
-                                .width(2.5),
+                                .width(2.5_f32),
                         );
                     });
             });

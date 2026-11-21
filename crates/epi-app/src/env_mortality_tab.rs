@@ -313,19 +313,19 @@ impl EnvMortalityWorkbenchState {
                                 Line::new(PlotPoints::from(mid))
                                     .name("Cumulative RR")
                                     .color(Color32::from_rgb(244, 63, 94))
-                                    .width(2.2),
+                                    .width(2.2_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(lo))
                                     .name("95% CI Low")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(hi))
                                     .name("95% CI High")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                         });
                 });
@@ -366,19 +366,19 @@ impl EnvMortalityWorkbenchState {
                                 Line::new(PlotPoints::from(mid))
                                     .name("Lag-Specific RR")
                                     .color(Color32::from_rgb(56, 189, 248))
-                                    .width(2.2),
+                                    .width(2.2_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(lo))
                                     .name("95% CI Low")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(hi))
                                     .name("95% CI High")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                         });
                 });
@@ -702,32 +702,32 @@ impl EnvMortalityWorkbenchState {
                                 Line::new(PlotPoints::from(base))
                                     .name("Expected Baseline")
                                     .color(Color32::from_rgb(52, 211, 153))
-                                    .width(2.0),
+                                    .width(2.0_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(u2))
                                     .name("Substantial (+2Z)")
                                     .color(Color32::from_rgb(251, 191, 36))
-                                    .width(1.2),
+                                    .width(1.2_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(u4))
                                     .name("Extreme (+4Z)")
                                     .color(Color32::from_rgb(244, 63, 94))
-                                    .width(1.2),
+                                    .width(1.2_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(obs))
                                     .name("Observed Deaths")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.5),
+                                    .width(1.5_f32),
                             );
                             if !alerts.is_empty() {
                                 plot_ui.points(
                                     Points::new(PlotPoints::from(alerts))
                                         .name("Z > Threshold")
                                         .color(Color32::from_rgb(251, 113, 133))
-                                        .radius(3.8),
+                                        .radius(3.8_f32),
                                 );
                             }
                         });
@@ -765,7 +765,7 @@ impl EnvMortalityWorkbenchState {
                                 Line::new(PlotPoints::from(zs))
                                     .name("Box-Cox Z-Score")
                                     .color(Color32::from_rgb(56, 189, 248))
-                                    .width(1.8),
+                                    .width(1.8_f32),
                             );
                         });
                 });

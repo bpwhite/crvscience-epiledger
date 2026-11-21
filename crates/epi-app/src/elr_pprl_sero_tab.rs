@@ -743,25 +743,25 @@ impl ElrPprlSeroWorkbenchState {
                                 Line::new(PlotPoints::from(mid))
                                     .name("Catalytic IgG %")
                                     .color(Color32::from_rgb(52, 211, 153))
-                                    .width(2.2),
+                                    .width(2.2_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(lo))
                                     .name("95% CI Low")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             plot_ui.line(
                                 Line::new(PlotPoints::from(hi))
                                     .name("95% CI High")
                                     .color(Color32::from_rgb(148, 163, 184))
-                                    .width(1.0),
+                                    .width(1.0_f32),
                             );
                             plot_ui.points(
                                 Points::new(PlotPoints::from(obs))
                                     .name("Observed Serosurvey")
                                     .color(Color32::from_rgb(251, 191, 36))
-                                    .radius(4.0),
+                                    .radius(4.0_f32),
                             );
                         });
                 }
@@ -780,6 +780,11 @@ impl ElrPprlSeroWorkbenchState {
 
                 if let Some(ref tnd) = self.cached_tnd {
                     ui.separator();
+                    ui.monospace(format!(
+                        "TND Study Cohort      : {} ({} stratified cells)",
+                        self.tnd_dataset.title,
+                        self.tnd_dataset.cells.len()
+                    ));
                     ui.monospace(format!(
                         "Symptomatic Specimens : {} Test-Pos Cases  |  {} Test-Neg Controls",
                         tnd.total_cases, tnd.total_controls

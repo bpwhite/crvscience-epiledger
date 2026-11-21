@@ -384,8 +384,11 @@ impl EpiLedgerGuiApp {
             .expect("SQLite initialization");
 
         let seed_ds = builtin_measles_weekly_dataset();
+        let mut seed_commit_err: Option<String> = None;
         if store.list_vintages().map(|v| v.is_empty()).unwrap_or(true) {
-            let _ = store.commit_vintage(&seed_ds);
+            if let Err(e) = store.commit_vintage(&seed_ds) {
+                seed_commit_err = Some(e.to_string());
+            }
         }
 
         let vintages = store.list_vintages().unwrap_or_default();
@@ -510,14 +513,30 @@ impl EpiLedgerGuiApp {
             diff_results: Vec::new(),
         };
         app.apply_campaign_preset(SurveillanceCampaignPreset::UsMeasles2022_2026);
+        if let Some(err) = seed_commit_err {
+            app.status_banner = format!("SQLite seed vintage commit warning: {err}");
+        }
         app
+    }
+
+    fn commit_vintage_reporting_error(&mut self, dataset: &TimeSeriesDataset) -> bool {
+        match self.store.commit_vintage(dataset) {
+            Ok(()) => true,
+            Err(e) => {
+                self.status_banner = format!(
+                    "SQLite vintage commit error for '{}': {e}",
+                    dataset.vintage_id
+                );
+                false
+            }
+        }
     }
 
     fn apply_campaign_preset(&mut self, campaign: SurveillanceCampaignPreset) {
         self.active_campaign = campaign;
         let ds = campaign.build_weekly_dataset();
         let vid = ds.vintage_id.clone();
-        let _ = self.store.commit_vintage(&ds);
+        let commit_err = self.store.commit_vintage(&ds).err().map(|e| e.to_string());
         self.refresh_vintages();
         self.active_dataset = ds;
         self.active_window_cutoff_idx = campaign
@@ -568,13 +587,20 @@ impl EpiLedgerGuiApp {
             .sync_to_campaign(campaign, &self.active_dataset);
         self.superspreading_net.sync_to_campaign(campaign);
         self.dp_audit.refresh_from_store(&self.store, &vid);
-        self.status_banner = format!(
-            "Synchronized Active Cohort '{}': pathogen {}, {} weeks, {} US jurisdictions & all sub-modules.",
-            campaign.label(),
-            campaign.pathogen(),
-            self.active_dataset.points.len(),
-            self.jurisdictions.len()
-        );
+        self.status_banner = match commit_err {
+            Some(err) => format!(
+                "Synchronized Active Cohort '{}' ({} weeks) — SQLite commit warning: {err}",
+                campaign.label(),
+                self.active_dataset.points.len(),
+            ),
+            None => format!(
+                "Synchronized Active Cohort '{}': pathogen {}, {} weeks, {} US jurisdictions & all sub-modules.",
+                campaign.label(),
+                campaign.pathogen(),
+                self.active_dataset.points.len(),
+                self.jurisdictions.len()
+            ),
+        };
     }
 
     fn recompute_analytics(&mut self) {
@@ -657,7 +683,7 @@ impl EpiLedgerGuiApp {
                     raw_rows,
                     stale,
                 } => {
-                    let _ = self.store.commit_vintage(&dataset);
+                    let committed = self.commit_vintage_reporting_error(&dataset);
                     self.refresh_vintages();
                     if !dataset.points.is_empty() {
                         self.active_dataset = dataset;
@@ -669,30 +695,34 @@ impl EpiLedgerGuiApp {
                         }
                         self.recompute_spatial();
                     }
-                    self.status_banner = format!(
-                        "CDC SODA sync complete: {} rows parsed (stale_fallback={stale}).",
-                        raw_rows
-                    );
+                    if committed {
+                        self.status_banner = format!(
+                            "CDC SODA sync complete: {} rows parsed (stale_fallback={stale}).",
+                            raw_rows
+                        );
+                    }
                 }
                 WorkerMessage::DelphiLoaded(dataset) => {
-                    let _ = self.store.commit_vintage(&dataset);
+                    let committed = self.commit_vintage_reporting_error(&dataset);
                     self.refresh_vintages();
                     self.active_dataset = dataset;
                     self.rt_cfg.si_mean_days = 3.6;
                     self.rt_cfg.si_sd_days = 1.6;
                     self.recompute_analytics();
-                    self.status_banner = format!(
-                        "Loaded CMU Delphi FluView ILINet series '{}' ({} weeks).",
-                        self.active_dataset.title,
-                        self.active_dataset.points.len()
-                    );
+                    if committed {
+                        self.status_banner = format!(
+                            "Loaded CMU Delphi FluView ILINet series '{}' ({} weeks).",
+                            self.active_dataset.title,
+                            self.active_dataset.points.len()
+                        );
+                    }
                 }
                 WorkerMessage::FdaFaersLoaded {
                     dataset,
                     reactions,
                     stale,
                 } => {
-                    let _ = self.store.commit_vintage(&dataset);
+                    let committed = self.commit_vintage_reporting_error(&dataset);
                     self.refresh_vintages();
                     self.active_dataset = dataset;
                     if let Some(top_rx) = reactions.first() {
@@ -714,10 +744,12 @@ impl EpiLedgerGuiApp {
                     self.rt_cfg.si_mean_days = 3.6;
                     self.rt_cfg.si_sd_days = 1.6;
                     self.recompute_analytics();
-                    self.status_banner = format!(
-                        "openFDA FAERS weekly series loaded ({} weeks, stale_fallback={stale}).",
-                        self.active_dataset.points.len()
-                    );
+                    if committed {
+                        self.status_banner = format!(
+                            "openFDA FAERS weekly series loaded ({} weeks, stale_fallback={stale}).",
+                            self.active_dataset.points.len()
+                        );
+                    }
                 }
                 WorkerMessage::FdaRecallsLoaded(recalls) => {
                     let n = recalls.len();
@@ -725,12 +757,14 @@ impl EpiLedgerGuiApp {
                     self.status_banner = format!("Loaded {n} live openFDA drug recall records.");
                 }
                 WorkerMessage::WhoLoaded(dataset) => {
-                    let _ = self.store.commit_vintage(&dataset);
+                    let committed = self.commit_vintage_reporting_error(&dataset);
                     self.refresh_vintages();
                     self.active_dataset = dataset;
                     self.recompute_analytics();
-                    self.status_banner =
-                        format!("Loaded WHO GHO series '{}'.", self.active_dataset.title);
+                    if committed {
+                        self.status_banner =
+                            format!("Loaded WHO GHO series '{}'.", self.active_dataset.title);
+                    }
                 }
                 WorkerMessage::Error(err) => {
                     self.status_banner = format!("Live connector warning: {err}");
@@ -740,11 +774,24 @@ impl EpiLedgerGuiApp {
     }
 
     fn render_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.show_about_modal = !self.show_about_modal;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.show_about_modal {
+                self.show_about_modal = false;
+            } else if !self.global_search_query.is_empty() {
+                self.global_search_query.clear();
+            }
+        }
+        if ctx.input(|i| {
+            (i.modifiers.ctrl || i.modifiers.command)
+                && (i.key_pressed(egui::Key::K) || i.key_pressed(egui::Key::F))
+        }) {
             self.focus_global_search = true;
         }
 
-        // Row 1: 5 Clean Domain Tabs + Global Search & Filter Bar (Ctrl+K)
+        // Row 1: 5 Clean Domain Tabs + Global Search & Filter Bar (Ctrl+K / Ctrl+F)
         let cur_pillar = self.active_tab.pillar();
         ui.horizontal_wrapped(|ui| {
             ui.heading(
@@ -779,17 +826,48 @@ impl EpiLedgerGuiApp {
                 search_resp.request_focus();
                 self.focus_global_search = false;
             }
+            let enter_jump =
+                search_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if !self.global_search_query.is_empty() && ui.small_button("Clear").clicked() {
                 self.global_search_query.clear();
             }
 
             let mut mask_bool = self.suppression_policy == SuppressionPolicy::NchsWonderLe9;
-            if ui.checkbox(&mut mask_bool, "NCHS <=9 Mask").changed() {
+            if ui
+                .checkbox(&mut mask_bool, "NCHS <=9 Mask")
+                .on_hover_text(
+                    "Suppress non-zero counts in 1..=9 under NCHS/CDC WONDER small-cell confidentiality rules.",
+                )
+                .changed()
+            {
                 self.suppression_policy = if mask_bool {
                     SuppressionPolicy::NchsWonderLe9
                 } else {
                     SuppressionPolicy::Unmasked
                 };
+            }
+
+            // Quick Enter-to-jump when searching modules from Search (Ctrl+K)
+            if enter_jump {
+                let q_enter = self.global_search_query.trim().to_ascii_lowercase();
+                if !q_enter.is_empty() {
+                    let target = ActiveTab::ALL_SEARCHABLE
+                        .iter()
+                        .find(|&&(_, title, tags)| {
+                            format!("{title} {tags}").to_ascii_lowercase().contains(&q_enter)
+                        })
+                        .or_else(|| {
+                            ActiveTab::ALL_SEARCHABLE.iter().find(|&&(t, title, tags)| {
+                                format!("{} {} {}", t.pillar().label(), title, tags)
+                                    .to_ascii_lowercase()
+                                    .contains(&q_enter)
+                            })
+                        });
+                    if let Some(&(tab, title, _)) = target {
+                        self.active_tab = tab;
+                        self.status_banner = format!("Jumped to '{title}'.");
+                    }
+                }
             }
         });
 
@@ -897,6 +975,9 @@ impl EpiLedgerGuiApp {
 
         // Row 3: Sub-View Selector for Current Domain + Dual Time-Window Split Controls
         let n_pts = self.active_dataset.points.len().max(2);
+        let max_cut = n_pts.saturating_sub(4).max(1);
+        let min_cut = 12.min(max_cut);
+        self.active_window_cutoff_idx = self.active_window_cutoff_idx.clamp(min_cut, max_cut);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("View:").small().weak());
             for &(sub_tab, sub_label) in cur_pillar.sub_tabs() {
@@ -906,15 +987,15 @@ impl EpiLedgerGuiApp {
             ui.separator();
             ui.label(RichText::new("Baseline / Active Cutoff:").small().weak());
             ui.add(
-                egui::Slider::new(&mut self.active_window_cutoff_idx, 12..=(n_pts - 4))
+                egui::Slider::new(&mut self.active_window_cutoff_idx, min_cut..=max_cut)
                     .show_value(false),
             );
             ui.monospace(RichText::new(&active_cutoff_label).small().color(Color32::from_rgb(34, 211, 238)));
             if ui.small_button("52w Active").clicked() {
-                self.active_window_cutoff_idx = n_pts.saturating_sub(52);
+                self.active_window_cutoff_idx = n_pts.saturating_sub(52).clamp(min_cut, max_cut);
             }
             if ui.small_button("26w Active").clicked() {
-                self.active_window_cutoff_idx = n_pts.saturating_sub(26);
+                self.active_window_cutoff_idx = n_pts.saturating_sub(26).clamp(min_cut, max_cut);
             }
         });
     }
@@ -1017,7 +1098,8 @@ impl EpiLedgerGuiApp {
                     });
 
                 ui.separator();
-                ui.label("Aberration:");
+                ui.label("Aberration:")
+                    .on_hover_text("Outbreak aberration detection model: Farrington quasi-Poisson GLM or CDC EARS C1/C2/C3 CUSUM.");
                 for m in [
                     AberrationMethod::FarringtonQuasiPoisson,
                     AberrationMethod::EarsC1,
@@ -1026,6 +1108,7 @@ impl EpiLedgerGuiApp {
                 ] {
                     if ui
                         .selectable_label(self.ab_cfg.method == m, m.label())
+                        .on_hover_text("Select aberration detection baseline & upper-threshold algorithm.")
                         .clicked()
                     {
                         self.ab_cfg.method = m;
@@ -1054,6 +1137,7 @@ impl EpiLedgerGuiApp {
                         egui::Slider::new(&mut self.rt_cfg.si_mean_days, 1.5..=21.0)
                             .text("SI Mean (d)"),
                     )
+                    .on_hover_text("Mean serial interval (days) of the discretized Gamma infectivity profile for Cori Rt.")
                     .changed()
                 {
                     self.selected_si_preset = "custom".to_string();
@@ -1064,6 +1148,7 @@ impl EpiLedgerGuiApp {
                         egui::Slider::new(&mut self.rt_cfg.si_sd_days, 0.5..=10.0)
                             .text("SI SD (d)"),
                     )
+                    .on_hover_text("Standard deviation (days) of the discretized Gamma serial interval for Cori Rt.")
                     .changed()
                 {
                     self.selected_si_preset = "custom".to_string();
@@ -1071,12 +1156,14 @@ impl EpiLedgerGuiApp {
                 }
                 if ui
                     .add(egui::Slider::new(&mut self.rt_cfg.tau_weeks, 1..=8).text("Cori tau (wk)"))
+                    .on_hover_text("Sliding posterior estimation window tau (weeks) smoothing instantaneous Cori Rt.")
                     .changed()
                 {
                     dirty = true;
                 }
                 if ui
                     .add(egui::Slider::new(&mut self.ab_cfg.z_alpha, 1.65..=3.50).text("z-alpha"))
+                    .on_hover_text("Normal critical multiplier z-alpha governing upper aberration alert threshold.")
                     .changed()
                 {
                     dirty = true;
@@ -1233,7 +1320,7 @@ impl EpiLedgerGuiApp {
             if !alert_pts.is_empty() {
                 plot_ui.points(
                     Points::new(PlotPoints::from(alert_pts))
-                        .radius(4.5)
+                        .radius(4.5_f32)
                         .name("Aberration Alert Peak")
                         .color(Color32::from_rgb(251, 113, 133)),
                 );
@@ -1243,7 +1330,7 @@ impl EpiLedgerGuiApp {
                     VLine::new(cx)
                         .name(cutoff_label.clone())
                         .color(Color32::from_rgb(251, 191, 36))
-                        .width(2.0),
+                        .width(2.0_f32),
                 );
             }
         });
@@ -1360,7 +1447,7 @@ impl EpiLedgerGuiApp {
                         Line::new(PlotPoints::from(seg))
                             .name("Active Outbreak Mean Rt")
                             .color(Color32::from_rgb(34, 211, 238))
-                            .width(2.0),
+                            .width(2.0_f32),
                     );
                 }
                 for seg in rt_high_segs {
@@ -1382,7 +1469,7 @@ impl EpiLedgerGuiApp {
                         VLine::new(cx)
                             .name(cutoff_label.clone())
                             .color(Color32::from_rgb(251, 191, 36))
-                            .width(2.0),
+                            .width(2.0_f32),
                     );
                 }
             });
@@ -1878,13 +1965,13 @@ impl EpiLedgerGuiApp {
                         painter.rect_stroke(
                             cell_rect,
                             4.0,
-                            Stroke::new(2.2, Color32::from_rgb(245, 158, 11)),
+                            Stroke::new(2.2_f32, Color32::from_rgb(245, 158, 11)),
                         );
                     } else if self.highlighted_cluster_members.contains(fips) {
                         painter.rect_stroke(
                             cell_rect,
                             4.0,
-                            Stroke::new(1.8, Color32::from_rgb(52, 211, 153)),
+                            Stroke::new(1.8_f32, Color32::from_rgb(52, 211, 153)),
                         );
                     }
                     painter.text(
@@ -2253,14 +2340,16 @@ impl EpiLedgerGuiApp {
                     };
                     match res {
                         Ok(ds) => {
-                            let _ = self.store.commit_vintage(&ds);
+                            let committed = self.commit_vintage_reporting_error(&ds);
                             self.refresh_vintages();
                             self.active_dataset = ds;
                             self.recompute_analytics();
                             self.active_tab = ActiveTab::Surveillance;
-                            self.status_banner =
-                                "Imported local dataset and committed to SQLite vintage ledger."
-                                    .to_string();
+                            if committed {
+                                self.status_banner =
+                                    "Imported local dataset and committed to SQLite vintage ledger."
+                                        .to_string();
+                            }
                         }
                         Err(e) => self.status_banner = format!("Import failed: {e}"),
                     }
@@ -2275,7 +2364,7 @@ impl EpiLedgerGuiApp {
                     };
                     match import_fhir_r4_bundle_file(&path, flt) {
                         Ok(sum) => {
-                            let _ = self.store.commit_vintage(&sum.dataset);
+                            let committed = self.commit_vintage_reporting_error(&sum.dataset);
                             self.refresh_vintages();
                             if !sum.state_counts_by_fips.is_empty() {
                                 for r in &mut self.jurisdictions {
@@ -2287,10 +2376,12 @@ impl EpiLedgerGuiApp {
                             self.active_dataset = sum.dataset;
                             self.recompute_analytics();
                             self.active_tab = ActiveTab::Surveillance;
-                            self.status_banner = format!(
-                                "Imported HL7 FHIR R4 Bundle ({} resources scanned).",
-                                sum.total_resources_scanned
-                            );
+                            if committed {
+                                self.status_banner = format!(
+                                    "Imported HL7 FHIR R4 Bundle ({} resources scanned).",
+                                    sum.total_resources_scanned
+                                );
+                            }
                         }
                         Err(e) => self.status_banner = format!("FHIR R4 import error: {e}"),
                     }
@@ -2317,6 +2408,7 @@ impl EpiLedgerGuiApp {
 
                 if ui.button("Export Active Series CSV...").clicked() {
                     if let Some(out) = rfd::FileDialog::new()
+                        .add_filter("CSV", &["csv"])
                         .set_file_name("epiledger_export.csv")
                         .save_file()
                     {
@@ -2335,6 +2427,7 @@ impl EpiLedgerGuiApp {
 
                 if ui.button("Export Active Vintage as HL7 FHIR R4 Bundle...").clicked() {
                     if let Some(out) = rfd::FileDialog::new()
+                        .add_filter("FHIR R4 JSON", &["json"])
                         .set_file_name("epiledger_fhir_r4_bundle.json")
                         .save_file()
                     {
@@ -2352,6 +2445,7 @@ impl EpiLedgerGuiApp {
 
                 if ui.button("Export Active Vintage JSON...").clicked() {
                     if let Some(out) = rfd::FileDialog::new()
+                        .add_filter("JSON", &["json"])
                         .set_file_name("epiledger_vintage.json")
                         .save_file()
                     {
@@ -2768,11 +2862,13 @@ impl EpiLedgerGuiApp {
                     let act = self.elr_pprl_sero.render(ui, &mut self.status_banner);
                     if let Some(ds) = act.commit_hl7_dataset {
                         let vid = ds.vintage_id.clone();
-                        let _ = self.store.commit_vintage(&ds);
+                        let committed = self.commit_vintage_reporting_error(&ds);
                         self.refresh_vintages();
                         self.active_dataset = ds;
                         self.recompute_analytics();
-                        self.status_banner = format!("Committed deduplicated HL7 v2.5.1 vintage '{vid}' into SQLite.");
+                        if committed {
+                            self.status_banner = format!("Committed deduplicated HL7 v2.5.1 vintage '{vid}' into SQLite.");
+                        }
                     }
                     if let Some((immune_frac, waning_days)) = act.apply_sero_to_seir {
                         self.seir_cfg.initial_immune_fraction = immune_frac.clamp(0.0, 0.99);
@@ -2808,7 +2904,7 @@ impl EpiLedgerGuiApp {
                     );
                     if let Some(dp_ds) = act.commit_dp_vintage {
                         let vid = dp_ds.vintage_id.clone();
-                        let _ = self.store.commit_vintage(&dp_ds);
+                        let _ = self.commit_vintage_reporting_error(&dp_ds);
                         self.refresh_vintages();
                         self.active_dataset = dp_ds;
                         self.recompute_analytics();
@@ -2850,14 +2946,16 @@ impl EpiLedgerGuiApp {
                     let act = self.crc_syndromic.render(ui, &mut self.status_banner);
                     if let Some(syn_ds) = act.commit_syndrome_vintage {
                         let vid = syn_ds.vintage_id.clone();
-                        let _ = self.store.commit_vintage(&syn_ds);
+                        let committed = self.commit_vintage_reporting_error(&syn_ds);
                         self.refresh_vintages();
                         self.active_dataset = syn_ds;
                         self.recompute_analytics();
                         self.active_tab = ActiveTab::Surveillance;
-                        self.status_banner = format!(
-                            "Committed NSSP ESSENCE syndrome series '{vid}' into SQLite and updated Cori Rt / Farrington."
-                        );
+                        if committed {
+                            self.status_banner = format!(
+                                "Committed NSSP ESSENCE syndrome series '{vid}' into SQLite and updated Cori Rt / Farrington."
+                            );
+                        }
                     }
                 }
                 ActiveTab::SeverityAndSurge => {
@@ -2974,5 +3072,96 @@ mod tests {
             app.update_ui(c);
         });
         assert!(!out.shapes.is_empty());
+    }
+
+    #[test]
+    fn two_point_dataset_renders_without_underflow_panic() {
+        let ctx = egui::Context::default();
+        let mut app = EpiLedgerGuiApp::new_headless(&ctx, PathBuf::from(":memory:"));
+        let mut short_ds = app.active_dataset.clone();
+        short_ds.vintage_id = "short_2pt_test".to_string();
+        short_ds.points.truncate(2);
+        app.active_dataset = short_ds;
+        app.active_window_cutoff_idx = 100;
+        app.recompute_analytics();
+
+        let out = ctx.run(egui::RawInput::default(), |c| {
+            app.update_ui(c);
+        });
+        assert!(!out.shapes.is_empty());
+        assert_eq!(app.active_window_cutoff_idx, 1);
+    }
+
+    #[test]
+    fn f1_escape_ctrl_f_and_enter_jump_shortcuts() {
+        let ctx = egui::Context::default();
+        let mut app = EpiLedgerGuiApp::new_headless(&ctx, PathBuf::from(":memory:"));
+        assert!(!app.show_about_modal);
+
+        let step_key = |app: &mut EpiLedgerGuiApp, key: egui::Key, modifiers: egui::Modifiers| {
+            let mut raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                modifiers,
+                ..Default::default()
+            };
+            raw.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            });
+            let _ = ctx.run(raw, |c| app.update_ui(c));
+        };
+
+        // F1 toggles About modal open
+        step_key(&mut app, egui::Key::F1, egui::Modifiers::NONE);
+        assert!(app.show_about_modal);
+
+        // Escape dismisses About modal first without clearing search query
+        app.global_search_query = "wastewater".to_string();
+        step_key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(!app.show_about_modal);
+        assert_eq!(app.global_search_query, "wastewater");
+
+        // Second Escape clears non-empty global search query
+        step_key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(app.global_search_query.is_empty());
+
+        // Ctrl+F focuses global search and Enter jumps to matching module
+        step_key(&mut app, egui::Key::F, egui::Modifiers::CTRL);
+        let mut raw_text = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        raw_text.events.push(egui::Event::Text("wastewater".to_string()));
+        raw_text.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(raw_text, |c| app.update_ui(c));
+        assert_eq!(app.active_tab, ActiveTab::WastewaterAndAmr);
+    }
+
+    #[test]
+    fn commit_vintage_updates_and_verifies_audit_chain() {
+        let mut store = EpiStore::open_in_memory().expect("open in-memory store");
+        let ds = builtin_measles_weekly_dataset();
+        store.commit_vintage(&ds).expect("commit_vintage");
+        let ver = epi_store::verify_audit_chain(&store).expect("verify_audit_chain");
+        assert!(ver.is_valid);
+        assert_eq!(ver.total_entries, 1);
+        let logs = epi_store::list_audit_events(&store, 10).expect("list_audit_events");
+        assert_eq!(logs[0].action_kind, "COMMIT_VINTAGE");
+        assert_eq!(logs[0].target_ref, ds.vintage_id);
     }
 }

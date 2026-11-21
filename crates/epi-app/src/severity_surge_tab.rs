@@ -301,11 +301,15 @@ impl SeveritySurgeWorkbenchState {
                             Ok(rows) => {
                                 self.cfr_trunc_cutoff_days = rows.len();
                                 self.cfr_series = rows;
-                                let _ = self.recompute_cfr();
-                                *status_banner = format!(
-                                    "Computed Nishiura delay-adjusted cCFR across {} periods.",
-                                    self.cfr_series.len()
-                                );
+                                match self.recompute_cfr() {
+                                    Ok(()) => {
+                                        *status_banner = format!(
+                                            "Computed Nishiura delay-adjusted cCFR across {} periods.",
+                                            self.cfr_series.len()
+                                        );
+                                    }
+                                    Err(e) => *status_banner = format!("cCFR recompute error: {e}"),
+                                }
                             }
                             Err(e) => *status_banner = format!("CFR CSV error: {e}"),
                         },
@@ -316,11 +320,15 @@ impl SeveritySurgeWorkbenchState {
                     self.cfr_series = builtin_emerging_wave_cases_and_deaths();
                     self.cfr_trunc_cutoff_days = 26;
                     self.cfr_cfg = DelayCfrConfig::default();
-                    let _ = self.recompute_cfr();
+                    if let Err(e) = self.recompute_cfr() {
+                        *status_banner = format!("cCFR update warning: {e}");
+                    }
                 }
                 if ui.button("Show Full Resolved Wave (Day 60)").clicked() {
                     self.cfr_trunc_cutoff_days = self.cfr_series.len();
-                    let _ = self.recompute_cfr();
+                    if let Err(e) = self.recompute_cfr() {
+                        *status_banner = format!("cCFR update warning: {e}");
+                    }
                 }
             });
         });
@@ -357,13 +365,13 @@ impl SeveritySurgeWorkbenchState {
                             Line::new(PlotPoints::from(adj_pts))
                                 .name("Nishiura Delay-Adjusted cCFR (%)")
                                 .color(Color32::from_rgb(56, 189, 248))
-                                .width(2.5),
+                                .width(2.5_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(crude_pts))
                                 .name("Unadjusted Naive Crude CFR (%)")
                                 .color(Color32::from_rgb(244, 63, 94))
-                                .width(2.0),
+                                .width(2.0_f32),
                         );
                     });
             });
@@ -396,13 +404,13 @@ impl SeveritySurgeWorkbenchState {
                             Line::new(PlotPoints::from(cum_c_pts))
                                 .name("Cumulative Reported Cases C_t")
                                 .color(Color32::from_rgb(251, 191, 36))
-                                .width(2.2),
+                                .width(2.2_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(ut_pts))
                                 .name("Nishiura Outcome-Resolved u_t")
                                 .color(Color32::from_rgb(52, 211, 153))
-                                .width(2.4),
+                                .width(2.4_f32),
                         );
                     });
             });
@@ -715,24 +723,24 @@ impl SeveritySurgeWorkbenchState {
                             Line::new(PlotPoints::from(w_pts))
                                 .name("Acute Floor Census")
                                 .color(Color32::from_rgb(52, 211, 153))
-                                .width(2.2),
+                                .width(2.2_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(icu_pts))
                                 .name("Total ICU Census")
                                 .color(Color32::from_rgb(56, 189, 248))
-                                .width(2.5),
+                                .width(2.5_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(icu_hi))
                                 .name("ICU 95% Upper Bound")
-                                .stroke(Stroke::new(1.2, Color32::from_rgb(125, 211, 252))),
+                                .stroke(Stroke::new(1.2_f32, Color32::from_rgb(125, 211, 252))),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(vent_pts))
                                 .name("Invasive Ventilators")
                                 .color(Color32::from_rgb(251, 191, 36))
-                                .width(2.2),
+                                .width(2.2_f32),
                         );
                         plot_ui.hline(
                             HLine::new(self.surge_cfg.staffed_icu_beds)
@@ -783,19 +791,19 @@ impl SeveritySurgeWorkbenchState {
                             Line::new(PlotPoints::from(in_hosp_pts))
                                 .name("Still Hospitalized (%)")
                                 .color(Color32::from_rgb(56, 189, 248))
-                                .width(2.2),
+                                .width(2.2_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(disch_pts))
                                 .name("CIF Alive Discharge (%)")
                                 .color(Color32::from_rgb(52, 211, 153))
-                                .width(2.3),
+                                .width(2.3_f32),
                         );
                         plot_ui.line(
                             Line::new(PlotPoints::from(dead_pts))
                                 .name("CIF In-Hospital Death (%)")
                                 .color(Color32::from_rgb(244, 63, 94))
-                                .width(2.3),
+                                .width(2.3_f32),
                         );
                     });
             });
