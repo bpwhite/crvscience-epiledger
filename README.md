@@ -1,76 +1,75 @@
-# EpiLedger (`epiledger-rs`) — Native Rust Public Health Informatics Workbench
+# EpiLedger (`epiledger-rs` v2.0.0) — Native Rust Public Health Informatics Workbench
 
 ![EpiLedger Headless Workbench](validation/headless_screenshot.png)
 
-100% pure-Rust, local-first public health surveillance, differential-privacy governance, forecast evaluation, privacy-preserving clinical interoperability, environmental biostatistics, sero-epidemiology, antimicrobial resistance (`CLSI M39`), wastewater `SNV` deconvolution, superspreading network analytics, and phylodynamic genomics workbench.
+Pure-Rust, local-first public health surveillance, differential-privacy governance, forecast evaluation, privacy-preserving clinical record linkage (`PPRL`), environmental biostatistics, sero-epidemiology, `CLSI M39` antimicrobial resistance, wastewater `SNV` deconvolution, superspreading network analytics, and phylodynamic genomics workbench.
 
 Ships with **three execution interfaces** in a single `epiledger` binary:
 1. **16-Tab Native `wgpu`/`egui` Desktop Workstation** (`epiledger` or `epiledger gui`)
-2. **8-Screen Headless [`ratatui`](https://ratatui.rs/) + [`crossterm`](https://docs.rs/crossterm/) SSH Terminal UI** (`epiledger tui`) for remote Linux servers without `X11`/`Wayland`
-3. **39 Scriptable Batch CLI Subcommands** (`epiledger <subcommand> ...`) + standalone zero-JS HTML5/SVG Situation Report (`SitRep`) export
+2. **8-Screen Headless `ratatui` + `crossterm` SSH Terminal UI** (`epiledger tui`)
+3. **Batch CLI (`39` subcommands)** + zero-JS HTML5/SVG Situation Report (`SitRep`) exporter
 
-## Workspace Crate Architecture (5 Crates, 55 Rust Modules)
+## Workspace Crate Architecture (5 Crates)
 
-| Crate | Path | Modules & Capabilities |
+| Crate | Path | Key Capabilities |
 | :--- | :--- | :--- |
-| `epi-core` | `crates/epi-core` | `epiweek`, `schema`, `seed_data`: Pure-Rust CDC MMWR week math (`MmwrWeek`), [NCHS CDC WONDER small-cell suppression (`<=9`)](https://wonder.cdc.gov/mcd-icd10-provisional.html), SNOMED-CT/ICD-10/LOINC coding enums, and embedded [CDC US Weekly Measles (2022–2026)](https://www.cdc.gov/measles/data-research/index.html) & State Pertussis baselines |
-| `epi-store` | `crates/epi-store` | `bitemporal`, `dp_and_audit`, `pprl_bloom`: Bundled SQLite WAL (`rusqlite`) bitemporal vintage ledger, **Discrete Laplace `epsilon`-Differential Privacy budget ledger** ([Public Health DP](https://pmc.ncbi.nlm.nih.gov/articles/PMC8662814/)), **tamper-evident `SHA-256` hash-chained audit log**, and **LSH + birth-year hash-blocked 512-bit `HMAC-SHA256` bigram Bloom PPRL** + Fellegi-Sunter EM ([WA Bloom PPRL](https://pmc.ncbi.nlm.nih.gov/articles/PMC8761329/)) |
-| `epi-ingest` | `crates/epi-ingest` | `cdc_soda`, `cmu_delphi`, `openfda`, `who_gho`, `hl7_v2_elr`, `syndromic_essence`, `fhir_r4`, `geojson_spatial`, `local_files`, `sas_xport`: Keyless connectors for [CDC NNDSS](https://data.cdc.gov/NNDSS/NNDSS-Weekly-Data/x9gk-5huc), [CDC NWSS Wastewater](https://data.cdc.gov/Public-Health-Surveillance/NWSS-Public-SARS-CoV-2-Wastewater-Metric-Data/2ew6-ywp6), [CMU Delphi](https://cmu-delphi.github.io/delphi-epidata/api/fluview.html), [openFDA FAERS](https://open.fda.gov/apis/drug/event/), and [WHO GHO](https://www.who.int/data/gho/info/gho-odata-api); [HL7 v2.5.1 ELR](https://www.hl7.org/implement/standards/product_brief.cfm?product_id=98); deterministic **[NSSP ESSENCE](https://pmc.ncbi.nlm.nih.gov/articles/PMC11556616/) chief-complaint & `ICD-10-CM` `NegEx` classifier** ([validation](https://pmc.ncbi.nlm.nih.gov/articles/PMC11426074/)); [HL7 FHIR R4](https://hl7.org/fhir/R4/bundle.html); GeoJSON; and pure-Rust **SAS Transport v5 (`.XPT`)** `IBM370` binary decoding |
-| `epi-analytics` | `crates/epi-analytics` | `renewal_rt`, `aberration`, `nowcast`, `seir`, `forecast_scoring`, `superspreading_network`, `wastewater_demix`, `amr_antibiogram`, `capture_recapture`, `cfr_and_surge`, `sero_tnd_ve`, `dlnm_env`, `euromomo_mortality`, `lineage_logistics`, `phylo_outbreak`, `spatial_scan_zones`, `survey_weights`, `pharmacovigilance`, `rates_and_lag`, `math`: [Cori `Rt`](https://pmc.ncbi.nlm.nih.gov/articles/PMC3816335/), [`K = 11` `WIS`](https://pmc.ncbi.nlm.nih.gov/articles/PMC7880475/) + [Inverse-WIS ensembles](https://pmc.ncbi.nlm.nih.gov/articles/PMC8963571/), [Lloyd-Smith Negative Binomial `k` MLE](https://pmc.ncbi.nlm.nih.gov/articles/PMC1791715/) & [bipartite contact networks](https://pmc.ncbi.nlm.nih.gov/articles/PMC13303329/), [Freyja `L1` wastewater demixing](https://pmc.ncbi.nlm.nih.gov/articles/PMC12330420/), [`CLSI M39` antibiograms](https://pmc.ncbi.nlm.nih.gov/articles/PMC9580356/), [3-source log-linear & Chapman capture-recapture](https://pmc.ncbi.nlm.nih.gov/articles/PMC8705476/), [Nishiura right-truncated `cCFR`](https://pmc.ncbi.nlm.nih.gov/articles/PMC7529598/) & [competing-risk `ICU` surge](https://pmc.ncbi.nlm.nih.gov/articles/PMC9200328/), [Gasparrini DLNM](https://pmc.ncbi.nlm.nih.gov/articles/PMC2998707/), [EuroMOMO excess mortality](https://pmc.ncbi.nlm.nih.gov/articles/PMC12944855/), [Kulldorff spatial scan](https://pmc.ncbi.nlm.nih.gov/articles/PMC5816564/), [Taylor survey variance](https://wwwn.cdc.gov/nchs/nhanes/tutorials/varianceestimation.aspx), and [FAERS `PRR`/`ROR`/`IC`](https://pmc.ncbi.nlm.nih.gov/articles/PMC12443087/) |
-| `epi-app` | `crates/epi-app` | `main`, `gui`, `tui`, `cli`, `cartogram`, `genomic_tab`, `env_mortality_tab`, `elr_pprl_sero_tab`, `scoring_sitrep_tab`, `dp_audit_tab`, `network_tab`, `wastewater_amr_tab`, `crc_syndromic_tab`, `severity_surge_tab`, `sitrep_export`: 16-tab `egui` desktop app, 8-screen `ratatui` SSH TUI, HTML5/SVG `SitRep` exporter, and 39 CLI subcommands |
+| `epi-core` | `crates/epi-core` | CDC `MmwrWeek` calendar math, `SuppressionPolicy::NchsWonderLe9` (`<=9`) masking (`CellValue`), SNOMED-CT/ICD-10/LOINC enums, embedded CDC US Measles & State Pertussis baselines |
+| `epi-store` | `crates/epi-store` | Bundled SQLite WAL (`EpiStore`), CSPRNG-keyed HMAC-SHA256 Discrete Laplace ($\varepsilon$-DP) & Canonne–Kamath–Steinke Discrete Gaussian ($\rho$-zCDP) with $\rho = \varepsilon^2 / 2$ accounting and per-row `zcdp_delta` persistence, tamper-evident SHA-256 hash chain, and hash-blocked 512-bit Bloom PPRL |
+| `epi-ingest` | `crates/epi-ingest` | CDC SODA (`NNDSS`, `NWSS`), CMU Delphi FluView, openFDA FAERS, WHO GHO OData, HL7 v2.5.1 ELR, deterministic NSSP ESSENCE `NegEx`, HL7 FHIR R4, GeoJSON, and pure-Rust SAS Transport v5 (`.XPT`) `IBM370` decoder |
+| `epi-analytics` | `crates/epi-analytics` | Cori (2013) shifted triangular-tent $R_t$ + daily EM disaggregation, Farrington/EARS aberration detection, right-truncation delay nowcasting, scoped-parallel RK4 + Binomial tau-leaping SEIR/SEIRS (`reported <= true_weekly_infections`), $K=11$ WIS ensembles, Lloyd-Smith $k$ MLE, Freyja $L_1$ wastewater demixing, `CLSI M39` antibiograms, 3-source CRC, Nishiura cCFR, Gasparrini DLNM, EuroMOMO, Kulldorff spatial scan, NHANES survey variance, FAERS PRR/ROR/IC |
+| `epi-app` | `crates/epi-app` | 16-tab `egui`/`egui_plot` desktop app (responsive perceptual US cartogram, shaded 95% CrI $R_t$ bands, debounced SEIR sliders, lazy Tab 12 PPRL benchmark), 8-screen `ratatui` TUI, SitRep HTML/SVG export, and CLI |
 
-## Build & Run (Linux, macOS, Windows, & Headless SSH)
+## Controls & Keyboard Hotkeys (GUI)
+
+| Shortcut / Control | Action | Scope / Notes |
+| :--- | :--- | :--- |
+| `Alt+1` – `Alt+5` | Switch to Domain Pillars 1–5 | Opens first sub-tab of selected pillar |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Cycle forward / backward across all 16 sub-tabs | Wraps across all 5 pillars |
+| `Ctrl+K` or `Ctrl+F` | Focus global `Search` bar (`Enter` jumps to match) | Global top bar |
+| `F1` | Toggle About EpiLedger modal | Global |
+| `Escape` | Close About modal, then clear global search | Global |
+| `NCHS <=9 Mask` checkbox | Enforce `SuppressionPolicy::NchsWonderLe9` | Masks `1..=9` cases & rates across plots, cartogram tiles (`*` + hatching), tooltips, state inspector, and LLR table |
+| SEIR / Nowcast Sliders | Tune delay, $R_0$, immunity, contact reduction, horizon | Debounced on `drag_stopped()` / `lost_focus()` |
+| Cartogram Tile Click / Hover | Inspect jurisdiction & view NCHS-safe tooltip | Responsive 12×8 US state + DC grid with perceptual colorbar |
+
+## Representative CLI Commands & Flags
+
+| Command | Arguments / Flags | Description |
+| :--- | :--- | :--- |
+| `epiledger` / `gui` | `--screenshot <OUT.png> [--screenshot-view <1\|2\|3>]` | Launch 16-tab desktop GUI or capture offscreen GPU PNG |
+| `tui` | `EPILEDGER_DB=<path>` env var | Launch 8-screen headless `ratatui` SSH terminal UI |
+| `vintages` / `analyze` | `[vintage_id]` | List SQLite vintages; run Cori $R_t$ & Farrington GLM |
+| `nowcast` / `seir-forecast` | `[vid] [delay_wk]` / `[vid] [weeks] [trajectories]` | Right-truncation nowcast & Binomial SEIR forecast |
+| `backtest-wis` / `export-sitrep` | `[vid] [horizon] [origins]` / `[vid] [out.html] [mask]` | $K=11$ WIS ensemble & standalone HTML5/SVG SitRep |
+| `dp-release` / `audit-verify` | `[vid] [eps] [cap] [out.csv]` / `[limit]` | CSPRNG Discrete Laplace release & SHA-256 chain verification |
+| `pprl-bench` / `pprl-link` | `[num_patients] [blocked\|cartesian]` / `[dice] [days]` | LSH + Birth-Year blocked PPRL & Fellegi–Sunter EM |
+| `offspring-k` / `contact-network` | `[csv\|builtin] [all\|ztnb]` / `[csv\|builtin] [out.dot]` | Negative Binomial $k$ MLE & bipartite contact networks |
+| `wastewater-demix` / `antibiogram` | `[snv.csv\|builtin] [log2\|sqrt]` / `[amr.csv\|builtin] [dedup\|raw]` | Freyja $L_1$ SNV deconvolution & CLSI M39 antibiograms |
+| `fetch-nndss` / `fetch-nwss` / `fetch-delphi` / `fetch-faers` / `fetch-who` | Provider query arguments | Keyless live surveillance ingestion with SQLite cache |
+
+Run `epiledger --help` for all 39 CLI subcommands.
+
+## Build, Tests & Headless Validation
 
 ```bash
-# Run all unit tests across the 5-crate workspace
 cargo test --workspace
-
-# 1. Launch the 16-tab native wgpu/egui desktop workstation
 cargo run --release -p epi-app
-
-# 2. Launch the 8-screen headless SSH Terminal UI (no X11/Wayland needed)
 cargo run --release -p epi-app -- tui
-
-# 3. Representative CLI examples across Phases 1-13
-cargo run --release -p epi-app -- offspring-k builtin all
-cargo run --release -p epi-app -- contact-network builtin outbreak_bipartite.dot
-cargo run --release -p epi-app -- wastewater-demix builtin log2 80
-cargo run --release -p epi-app -- antibiogram builtin dedup
-cargo run --release -p epi-app -- capture-recapture builtin
-cargo run --release -p epi-app -- syndromic-classify builtin
-cargo run --release -p epi-app -- cfr-adjust builtin 13.5 26
-cargo run --release -p epi-app -- hospital-surge builtin 55 32
-cargo run --release -p epi-app -- dp-release cdc_measles_2022_2026_v1 0.50 4.0 measles_dp.csv
-cargo run --release -p epi-app -- audit-verify 20
-```
-
-## Headless Validation
-
-Run the headless validation suite exercising `(epsilon, 0)` Discrete Laplace differential privacy & SHA-256 hash-chain tamper detection, 512-bit CLK Bloom-filter PPRL + NSSP ESSENCE `NegEx`, Cori renewal `Rt` estimation, and Freyja L1 wastewater deconvolution:
-
-```bash
 cargo test -p epi-analytics --test headless_validation -- --nocapture
 ```
 
-Validation artifacts (`epiledger_validation_summary.json` and `cori_rt_and_dp_audit.csv`) are documented in [`validation/README.md`](validation/README.md).
+Observed headless validation telemetry ([`validation/epiledger_validation_summary.json`](validation/epiledger_validation_summary.json)):
+- **T1 (`t1_discrete_laplace_dp_cell_suppression_and_hash_chain_tamper_verification`)**: 253 weekly points (`cdc_measles_2022_2026_v1`), 90 NCHS-suppressed small cells, Discrete Laplace $\varepsilon = 0.75$ ($\alpha = 0.4724$, analytical RMSE $1.8421$, empirical MAE $0.9723$, empirical RMSE $1.6078$), budget cap `2.0` enforcement, and SHA-256 audit tamper detection at `seq_no = 1`.
+- **T2 (`t2_bloom_pprl_blocking_and_essence_negex_classification`)**: 80 perturbed records across 40 entities, $91.77\%$ pair pruning via hash blocking ($260$ vs $3{,}160$ Cartesian pairs, $P = R = F_1 = 1.0$), and $100\%$ NSSP ESSENCE `NegEx` negation specificity across 8 negative controls ($37$ negations blocked).
+- **T3 (`t3_cori_rt_and_freyja_wastewater_deconvolution`)**: 129 valid Measles $R_t$ weeks (peak mean $4.72$, terminal $0.72$), daily-EM disaggregation on 8-week respiratory ILI, and Freyja $L_1$ wastewater deconvolution across 10 samples (`JN.1`, `KP.2`, `KP.3.1.1`, `XEC`) with weighted $L_1$ loss `0.00765` and `0.0` simplex deviation.
 
-## Citation & CRV Science Apps Hub
+## Documentation & Preprint
 
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — Complete 5-pillar / 16-tab manual, keyboard navigation, NCHS masking workflows, and CLI recipes.
+- [`docs/SCIENTIFIC_METHODS.md`](docs/SCIENTIFIC_METHODS.md) — Mathematical reference for CSPRNG DP / zCDP composition ($\rho = \varepsilon^2 / 2$), Cori (2013) triangular SI integration, Binomial SEIR reporting, and statistical models.
+- [`docs/epiledger_v2_user_guide.pdf`](docs/epiledger_v2_user_guide.pdf) — Printable v2.0 PDF guide.
 - **CRV Science Apps Hub**: <https://crvscience.com/apps>
 - **Preprint (`APP-PREPRINT-06`)**: [EpiLedger: Differentially Private Public Health Surveillance, Bloom-Filter Record Linkage, and Renewal Rt Estimation](https://crvscience.com/apps/preprints/epiledger-differential-privacy-epidemiology)
 - **Concept DOI**: [`10.5281/zenodo.24222382`](https://doi.org/10.5281/zenodo.24222382)
 
-```bibtex
-@article{white2026epiledger,
-  author  = {Bryan P. White},
-  title   = {EpiLedger: Privacy-Safe Disease Tracking, Clinical Text Screening, and Outbreak Monitoring},
-  year    = {2026},
-  journal = {CRV Science Apps Preprints},
-  note    = {APP-PREPRINT-06, v2.0.0},
-  doi     = {10.5281/zenodo.24222382},
-  url     = {https://crvscience.com/apps/preprints/epiledger-differential-privacy-epidemiology}
-}
-```
-
 See [`CITATION.cff`](CITATION.cff) for machine-readable citation metadata.
-

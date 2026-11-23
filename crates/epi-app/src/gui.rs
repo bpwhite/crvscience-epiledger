@@ -25,7 +25,7 @@ use crate::scoring_sitrep_tab::ScoringSitrepWorkbenchState;
 use crate::severity_surge_tab::SeveritySurgeWorkbenchState;
 use crate::wastewater_amr_tab::WastewaterAmrWorkbenchState;
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
-use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points, VLine};
+use egui_plot::{Bar, BarChart, Legend, Line, Plot, PlotPoints, Points, Polygon, VLine};
 use epi_analytics::{
     build_us_state_scan_zones, calibrate_and_project_seir, compute_aberrations, compute_cori_rt,
     compute_disproportionality_2x2, compute_kulldorff_spatial_clusters,
@@ -118,6 +118,66 @@ pub(crate) fn format_mmwr_axis_mark(
         .get(rounded as usize)
         .cloned()
         .unwrap_or_default()
+}
+
+pub(crate) fn format_spatial_jurisdiction_cases(
+    cases: u32,
+    rate: f64,
+    policy: SuppressionPolicy,
+) -> String {
+    match CellValue::from_count(Some(cases as f64), false, policy) {
+        CellValue::Suppressed => "SUPP (<=9) (SUPP/100k)".to_string(),
+        CellValue::Missing => "-- (--/100k)".to_string(),
+        CellValue::Exact(v) => format!("{} ({:.2}/100k)", v.round() as u64, rate),
+    }
+}
+
+pub(crate) fn format_spatial_jurisdiction_summary(
+    sel: &JurisdictionRecord,
+    policy: SuppressionPolicy,
+) -> String {
+    let s2025 = format_spatial_jurisdiction_cases(sel.cases_2025, sel.rate_2025, policy);
+    let s2024 = format_spatial_jurisdiction_cases(sel.cases_2024, sel.rate_2024, policy);
+    if let Some(custom) = sel.active_custom_value {
+        let custom_disp = CellValue::from_count(Some(custom), false, policy).display_string(1);
+        format!("2025 Cases: {s2025} | 2024 Cases: {s2024} | Live Value: {custom_disp}")
+    } else {
+        format!("2025 Cases: {s2025} | 2024 Cases: {s2024}")
+    }
+}
+
+fn lerp_rgb(a: [u8; 3], b: [u8; 3], t: f32) -> Color32 {
+    let f = t.clamp(0.0, 1.0);
+    Color32::from_rgb(
+        (a[0] as f32 + (b[0] as f32 - a[0] as f32) * f).round() as u8,
+        (a[1] as f32 + (b[1] as f32 - a[1] as f32) * f).round() as u8,
+        (a[2] as f32 + (b[2] as f32 - a[2] as f32) * f).round() as u8,
+    )
+}
+
+fn perceptual_cartogram_color(t: f32) -> Color32 {
+    let x = t.clamp(0.0, 1.0);
+    // 4-stop perceptual dark-mode ramp: deep navy -> teal -> amber-gold -> crimson
+    const C0: [u8; 3] = [24, 52, 98];
+    const C1: [u8; 3] = [13, 148, 136];
+    const C2: [u8; 3] = [245, 158, 11];
+    const C3: [u8; 3] = [244, 63, 94];
+    if x < 0.33 {
+        lerp_rgb(C0, C1, x / 0.33)
+    } else if x < 0.67 {
+        lerp_rgb(C1, C2, (x - 0.33) / 0.34)
+    } else {
+        lerp_rgb(C2, C3, (x - 0.67) / 0.33)
+    }
+}
+
+fn contrast_text_for(bg: Color32) -> Color32 {
+    let luma = 0.299 * (bg.r() as f32) + 0.587 * (bg.g() as f32) + 0.114 * (bg.b() as f32);
+    if luma > 152.0 {
+        Color32::from_rgb(15, 23, 42)
+    } else {
+        Color32::WHITE
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +359,7 @@ pub struct EpiLedgerGuiApp {
     feed_nowcast_into_seir: bool,
     seir_preset_id: String,
     seir_cfg: SeirConfig,
+    pending_seir_recompute: bool,
     cached_nowcast: NowcastSeries,
     cached_seir: SeirForecastResult,
 
@@ -461,6 +522,7 @@ impl EpiLedgerGuiApp {
             feed_nowcast_into_seir: true,
             seir_preset_id: "measles".to_string(),
             seir_cfg,
+            pending_seir_recompute: false,
             cached_nowcast,
             cached_seir,
             jurisdictions,
@@ -789,6 +851,49 @@ impl EpiLedgerGuiApp {
                 && (i.key_pressed(egui::Key::K) || i.key_pressed(egui::Key::F))
         }) {
             self.focus_global_search = true;
+        }
+        let (alt_pillar_idx, ctrl_tab_dir) = ctx.input(|i| {
+            let alt_idx = if i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.command {
+                if i.key_pressed(egui::Key::Num1) {
+                    Some(0usize)
+                } else if i.key_pressed(egui::Key::Num2) {
+                    Some(1usize)
+                } else if i.key_pressed(egui::Key::Num3) {
+                    Some(2usize)
+                } else if i.key_pressed(egui::Key::Num4) {
+                    Some(3usize)
+                } else if i.key_pressed(egui::Key::Num5) {
+                    Some(4usize)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let tab_dir = if (i.modifiers.ctrl || i.modifiers.command)
+                && !i.modifiers.alt
+                && i.key_pressed(egui::Key::Tab)
+            {
+                Some(if i.modifiers.shift { -1isize } else { 1isize })
+            } else {
+                None
+            };
+            (alt_idx, tab_dir)
+        });
+        if let Some(p_idx) = alt_pillar_idx {
+            if let Some(pillar) = DomainPillar::ALL.get(p_idx) {
+                if let Some(&(first_tab, _)) = pillar.sub_tabs().first() {
+                    self.active_tab = first_tab;
+                }
+            }
+        }
+        if let Some(dir) = ctrl_tab_dir {
+            let all_tabs = &ActiveTab::ALL_SEARCHABLE;
+            if let Some(cur_idx) = all_tabs.iter().position(|&(t, _, _)| t == self.active_tab) {
+                let len = all_tabs.len() as isize;
+                let next_idx = ((cur_idx as isize + dir).rem_euclid(len)) as usize;
+                self.active_tab = all_tabs[next_idx].0;
+            }
         }
 
         // Row 1: 5 Clean Domain Tabs + Global Search & Filter Bar (Ctrl+K / Ctrl+F)
@@ -1288,6 +1393,11 @@ impl EpiLedgerGuiApp {
         let x_labels_epi = Arc::clone(&x_labels);
         let x_link_id = egui::Id::new("surveillance_x_link");
 
+        let epi_y_label = if self.suppression_policy == SuppressionPolicy::NchsWonderLe9 {
+            "Weekly Cases (NCHS <=9 Masked)"
+        } else {
+            "Weekly Reported Cases"
+        };
         let mut epi_plot = Plot::new("epi_curve_plot")
             .height(epi_h)
             .legend(
@@ -1297,7 +1407,8 @@ impl EpiLedgerGuiApp {
             )
             .link_axis(x_link_id, true, false)
             .x_grid_spacer(move |input| mmwr_week_grid_spacer(input, n_vis))
-            .x_axis_formatter(move |mark, range| format_mmwr_axis_mark(mark, range, &x_labels_epi));
+            .x_axis_formatter(move |mark, range| format_mmwr_axis_mark(mark, range, &x_labels_epi))
+            .y_axis_label(epi_y_label);
         if epi_y_max > 0.0 {
             epi_plot = epi_plot.include_y(epi_y_max * 1.18);
         }
@@ -1429,39 +1540,58 @@ impl EpiLedgerGuiApp {
             .x_grid_spacer(move |input| mmwr_week_grid_spacer(input, n_vis))
             .x_axis_formatter(move |mark, range| format_mmwr_axis_mark(mark, range, &x_labels_rt))
             .x_axis_label("MMWR Week (YYYY-Www)")
+            .y_axis_label("Effective Reproduction Number (Rt)")
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(PlotPoints::from(eq_pts))
                         .name("Equilibrium Rt = 1.0")
                         .color(Color32::from_rgb(16, 185, 129)),
                 );
-                for seg in rt_hist_segs {
-                    plot_ui.line(
-                        Line::new(PlotPoints::from(seg))
-                            .name("Baseline Archive Rt")
-                            .color(Color32::from_rgb(148, 163, 184)),
-                    );
+                for (seg_idx, (low_seg, high_seg)) in
+                    rt_low_segs.iter().zip(rt_high_segs.iter()).enumerate()
+                {
+                    if low_seg.len() >= 2 && low_seg.len() == high_seg.len() {
+                        let mut poly_pts = Vec::with_capacity(low_seg.len() * 2);
+                        poly_pts.extend_from_slice(high_seg);
+                        poly_pts.extend(low_seg.iter().rev().copied());
+                        let mut poly = Polygon::new(PlotPoints::from(poly_pts))
+                            .fill_color(Color32::from_rgba_unmultiplied(56, 189, 248, 38))
+                            .stroke(Stroke::NONE);
+                        if seg_idx == 0 {
+                            poly = poly.name("95% CrI Band");
+                        }
+                        plot_ui.polygon(poly);
+                    }
                 }
-                for seg in rt_mean_segs {
-                    plot_ui.line(
-                        Line::new(PlotPoints::from(seg))
-                            .name("Active Outbreak Mean Rt")
-                            .color(Color32::from_rgb(34, 211, 238))
-                            .width(2.0_f32),
-                    );
+                for (seg_idx, seg) in rt_hist_segs.into_iter().enumerate() {
+                    let mut line = Line::new(PlotPoints::from(seg))
+                        .color(Color32::from_rgb(148, 163, 184));
+                    if seg_idx == 0 {
+                        line = line.name("Baseline Archive Rt");
+                    }
+                    plot_ui.line(line);
                 }
-                for seg in rt_high_segs {
-                    plot_ui.line(
-                        Line::new(PlotPoints::from(seg))
-                            .name("95% CrI Upper")
-                            .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
-                    );
+                for (seg_idx, seg) in rt_mean_segs.into_iter().enumerate() {
+                    let mut line = Line::new(PlotPoints::from(seg))
+                        .color(Color32::from_rgb(34, 211, 238))
+                        .width(2.0_f32);
+                    if seg_idx == 0 {
+                        line = line.name("Active Outbreak Mean Rt");
+                    }
+                    plot_ui.line(line);
+                }
+                for (seg_idx, seg) in rt_high_segs.into_iter().enumerate() {
+                    let mut line = Line::new(PlotPoints::from(seg))
+                        .color(Color32::from_rgba_unmultiplied(96, 165, 250, 125));
+                    if seg_idx == 0 {
+                        line = line.name("95% CrI Bounds");
+                    }
+                    plot_ui.line(line);
                 }
                 for seg in rt_low_segs {
                     plot_ui.line(
                         Line::new(PlotPoints::from(seg))
-                            .name("95% CrI Lower")
-                            .color(Color32::from_rgba_unmultiplied(96, 165, 250, 110)),
+                            .color(Color32::from_rgba_unmultiplied(96, 165, 250, 125)),
                     );
                 }
                 if let Some(cx) = cutoff_x_opt {
@@ -1605,42 +1735,30 @@ impl EpiLedgerGuiApp {
             ui.separator();
 
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.nowcast_cfg.delay_mean_weeks, 0.2..=6.0)
-                            .text("Delay Mean (wk)"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.nowcast_cfg.delay_sd_weeks, 0.2..=4.0)
-                            .text("Delay SD (wk)"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.nowcast_cfg.max_delay_weeks, 1..=12)
-                            .text("Max Delay D (wk)"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.nowcast_cfg.overdispersion_phi, 1.0..=10.0)
-                            .text("Nowcast phi"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
+                let mut debounce_slider = |resp: egui::Response| {
+                    if resp.changed() {
+                        self.pending_seir_recompute = true;
+                    }
+                    if self.pending_seir_recompute && (resp.drag_stopped() || resp.lost_focus()) {
+                        dirty = true;
+                    }
+                };
+                debounce_slider(ui.add(
+                    egui::Slider::new(&mut self.nowcast_cfg.delay_mean_weeks, 0.2..=6.0)
+                        .text("Delay Mean (wk)"),
+                ));
+                debounce_slider(ui.add(
+                    egui::Slider::new(&mut self.nowcast_cfg.delay_sd_weeks, 0.2..=4.0)
+                        .text("Delay SD (wk)"),
+                ));
+                debounce_slider(ui.add(
+                    egui::Slider::new(&mut self.nowcast_cfg.max_delay_weeks, 1..=12)
+                        .text("Max Delay D (wk)"),
+                ));
+                debounce_slider(ui.add(
+                    egui::Slider::new(&mut self.nowcast_cfg.overdispersion_phi, 1.0..=10.0)
+                        .text("Nowcast phi"),
+                ));
             });
 
             ui.horizontal_wrapped(|ui| {
@@ -1650,62 +1768,44 @@ impl EpiLedgerGuiApp {
                 {
                     dirty = true;
                 }
-                if !self.seir_cfg.auto_calibrate_r0_from_rt
-                    && ui
-                        .add(egui::Slider::new(&mut self.seir_cfg.r0, 0.5..=20.0).text("Manual R0"))
-                        .changed()
-                {
-                    dirty = true;
+                let mut debounce_seir = |resp: egui::Response| {
+                    if resp.changed() {
+                        self.pending_seir_recompute = true;
+                    }
+                    if self.pending_seir_recompute && (resp.drag_stopped() || resp.lost_focus()) {
+                        dirty = true;
+                    }
+                };
+                if !self.seir_cfg.auto_calibrate_r0_from_rt {
+                    debounce_seir(ui.add(
+                        egui::Slider::new(&mut self.seir_cfg.r0, 0.5..=20.0).text("Manual R0"),
+                    ));
                 }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.seir_cfg.initial_immune_fraction, 0.0..=0.98)
-                            .text("Initial Immune"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.seir_cfg.latent_days, 0.5..=21.0)
-                            .text("Latent 1/sigma (d)"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.seir_cfg.infectious_days, 1.0..=28.0)
-                            .text("Infectious 1/gamma (d)"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.seir_cfg.contact_reduction, 0.0..=0.80)
-                            .text("Contact Reduction"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.seir_cfg.horizon_weeks, 4..=52)
-                            .text("Horizon (wk)"),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
+                debounce_seir(ui.add(
+                    egui::Slider::new(&mut self.seir_cfg.initial_immune_fraction, 0.0..=0.98)
+                        .text("Initial Immune"),
+                ));
+                debounce_seir(ui.add(
+                    egui::Slider::new(&mut self.seir_cfg.latent_days, 0.5..=21.0)
+                        .text("Latent 1/sigma (d)"),
+                ));
+                debounce_seir(ui.add(
+                    egui::Slider::new(&mut self.seir_cfg.infectious_days, 1.0..=28.0)
+                        .text("Infectious 1/gamma (d)"),
+                ));
+                debounce_seir(ui.add(
+                    egui::Slider::new(&mut self.seir_cfg.contact_reduction, 0.0..=0.80)
+                        .text("Contact Reduction"),
+                ));
+                debounce_seir(ui.add(
+                    egui::Slider::new(&mut self.seir_cfg.horizon_weeks, 4..=52)
+                        .text("Horizon (wk)"),
+                ));
             });
         });
 
         if dirty {
+            self.pending_seir_recompute = false;
             self.recompute_seir_and_nowcast();
         }
 
@@ -1899,22 +1999,34 @@ impl EpiLedgerGuiApp {
                     RichText::new("US 51-Jurisdiction Cartogram (Emerald Border = Selected Multi-State Cluster)")
                         .strong(),
                 );
-                let cell_w = 40.0;
-                let cell_h = 34.0;
-                let gap = 4.0;
-                let desired = Vec2::new(12.0 * (cell_w + gap), 8.0 * (cell_h + gap) + 8.0);
-                let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
+                let avail_w = ui.available_width().max(260.0);
+                let gap = (avail_w * 0.008).clamp(2.5, 6.0);
+                let cell_w = ((avail_w - 11.0 * gap - 4.0) / 12.0).clamp(20.0, 56.0);
+                let cell_h = (cell_w * 0.82).clamp(18.0, 46.0);
+                let font_sz = (cell_w * 0.27).clamp(8.5, 13.0);
+                let desired = Vec2::new(12.0 * cell_w + 11.0 * gap, 8.0 * cell_h + 7.0 * gap + 8.0);
+                let (rect, _bg_resp) = ui.allocate_exact_size(desired, egui::Sense::hover());
                 let painter = ui.painter_at(rect);
 
                 let mut by_fips: HashMap<&str, &JurisdictionRecord> = HashMap::new();
                 let mut max_rate = 1.0_f64;
                 for j in &self.jurisdictions {
-                    let r = j.active_custom_value.unwrap_or(if self.spatial_use_2025 {
-                        j.rate_2025
+                    let raw_cases = if self.spatial_use_2025 {
+                        j.cases_2025
                     } else {
-                        j.rate_2024
-                    });
-                    max_rate = max_rate.max(r);
+                        j.cases_2024
+                    };
+                    let suppressed = self.suppression_policy == SuppressionPolicy::NchsWonderLe9
+                        && raw_cases > 0
+                        && raw_cases <= 9;
+                    if !suppressed || j.active_custom_value.is_some() {
+                        let r = j.active_custom_value.unwrap_or(if self.spatial_use_2025 {
+                            j.rate_2025
+                        } else {
+                            j.rate_2024
+                        });
+                        max_rate = max_rate.max(r);
+                    }
                     by_fips.insert(j.fips.as_str(), j);
                 }
 
@@ -1924,48 +2036,93 @@ impl EpiLedgerGuiApp {
                     let cell_rect =
                         egui::Rect::from_min_size(egui::pos2(x0, y0), Vec2::new(cell_w, cell_h));
 
-                    if response.clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            if cell_rect.contains(pos) {
-                                self.selected_fips = fips.to_string();
-                            }
-                        }
+                    let cell_resp = ui.interact(
+                        cell_rect,
+                        ui.id().with(("cartogram_tile", fips)),
+                        egui::Sense::click(),
+                    );
+                    if cell_resp.clicked() {
+                        self.selected_fips = fips.to_string();
                     }
 
-                    let fill = if let Some(j) = by_fips.get(fips) {
+                    let (fill, is_suppressed, is_zero, tip_text) = if let Some(j) = by_fips.get(fips) {
                         let raw_cases = if self.spatial_use_2025 {
                             j.cases_2025
                         } else {
                             j.cases_2024
                         };
-                        if self.suppression_policy == SuppressionPolicy::NchsWonderLe9
+                        let suppressed = self.suppression_policy == SuppressionPolicy::NchsWonderLe9
                             && raw_cases > 0
                             && raw_cases <= 9
-                        {
-                            Color32::from_rgb(51, 65, 85)
+                            && j.active_custom_value.is_none();
+                        let zero_state = raw_cases == 0 && j.active_custom_value.is_none();
+                        let fill_col = if suppressed {
+                            Color32::from_rgb(55, 48, 82)
+                        } else if zero_state {
+                            Color32::from_rgb(22, 30, 46)
                         } else {
                             let val = j.active_custom_value.unwrap_or(if self.spatial_use_2025 {
                                 j.rate_2025
                             } else {
                                 j.rate_2024
                             });
-                            let t = (val / max_rate).clamp(0.0, 1.0) as f32;
-                            Color32::from_rgb(
-                                (30.0 + 30.0 * (1.0 - t)) as u8,
-                                (64.0 + 110.0 * t) as u8,
-                                (120.0 + 130.0 * t) as u8,
-                            )
-                        }
+                            perceptual_cartogram_color((val / max_rate).clamp(0.0, 1.0) as f32)
+                        };
+                        let summary = format_spatial_jurisdiction_summary(j, self.suppression_policy);
+                        let tip = format!(
+                            "{} ({}, FIPS {})\nPop: {}\n{}",
+                            j.name, abbr, fips, j.census_pop_2025, summary
+                        );
+                        (fill_col, suppressed, zero_state, tip)
                     } else {
-                        Color32::from_rgb(30, 41, 59)
+                        (
+                            Color32::from_rgb(22, 30, 46),
+                            false,
+                            true,
+                            format!("{abbr} (FIPS {fips}): No jurisdiction data"),
+                        )
                     };
 
+                    cell_resp.on_hover_text(tip_text);
+
                     painter.rect_filled(cell_rect, 4.0, fill);
+                    if is_suppressed {
+                        // Diagonal hatching distinguishes NCHS-suppressed (1..=9) states from 0-case states
+                        let hatch_col = Color32::from_rgba_unmultiplied(192, 132, 252, 115);
+                        painter.line_segment(
+                            [
+                                egui::pos2(cell_rect.left() + 3.0, cell_rect.bottom() - 3.0),
+                                egui::pos2(cell_rect.right() - 3.0, cell_rect.top() + 3.0),
+                            ],
+                            Stroke::new(1.1_f32, hatch_col),
+                        );
+                        painter.line_segment(
+                            [
+                                egui::pos2(cell_rect.left() + 3.0, cell_rect.center().y),
+                                egui::pos2(cell_rect.center().x, cell_rect.top() + 3.0),
+                            ],
+                            Stroke::new(1.1_f32, hatch_col),
+                        );
+                        painter.line_segment(
+                            [
+                                egui::pos2(cell_rect.center().x, cell_rect.bottom() - 3.0),
+                                egui::pos2(cell_rect.right() - 3.0, cell_rect.center().y),
+                            ],
+                            Stroke::new(1.1_f32, hatch_col),
+                        );
+                    } else if is_zero {
+                        painter.rect_stroke(
+                            cell_rect,
+                            4.0,
+                            Stroke::new(0.8_f32, Color32::from_rgb(51, 65, 85)),
+                        );
+                    }
+
                     if self.selected_fips == fips {
                         painter.rect_stroke(
                             cell_rect,
                             4.0,
-                            Stroke::new(2.2_f32, Color32::from_rgb(245, 158, 11)),
+                            Stroke::new(2.2_f32, Color32::from_rgb(250, 204, 21)),
                         );
                     } else if self.highlighted_cluster_members.contains(fips) {
                         painter.rect_stroke(
@@ -1974,14 +2131,60 @@ impl EpiLedgerGuiApp {
                             Stroke::new(1.8_f32, Color32::from_rgb(52, 211, 153)),
                         );
                     }
+
+                    let tile_label = if is_suppressed {
+                        format!("{abbr}*")
+                    } else {
+                        abbr.to_string()
+                    };
                     painter.text(
                         cell_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        abbr,
-                        egui::FontId::monospace(11.5),
-                        Color32::WHITE,
+                        tile_label,
+                        egui::FontId::monospace(font_sz),
+                        contrast_text_for(fill),
                     );
                 }
+
+                // Perceptual Colorbar Legend + Zero vs Suppressed Swatches
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    let (zero_sw, _) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), egui::Sense::hover());
+                    let zp = ui.painter_at(zero_sw);
+                    zp.rect_filled(zero_sw, 2.0, Color32::from_rgb(22, 30, 46));
+                    zp.rect_stroke(zero_sw, 2.0, Stroke::new(0.9_f32, Color32::from_rgb(71, 85, 105)));
+                    ui.label(RichText::new("0 cases").small());
+
+                    let (supp_sw, _) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), egui::Sense::hover());
+                    let sp = ui.painter_at(supp_sw);
+                    sp.rect_filled(supp_sw, 2.0, Color32::from_rgb(55, 48, 82));
+                    sp.line_segment(
+                        [
+                            egui::pos2(supp_sw.left() + 2.0, supp_sw.bottom() - 2.0),
+                            egui::pos2(supp_sw.right() - 2.0, supp_sw.top() + 2.0),
+                        ],
+                        Stroke::new(1.1_f32, Color32::from_rgb(192, 132, 252)),
+                    );
+                    ui.label(RichText::new("* Suppressed (1..=9)").small());
+
+                    ui.separator();
+                    ui.label(RichText::new("0").small().monospace());
+                    let bar_w = 110.0_f32;
+                    let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, 12.0), egui::Sense::hover());
+                    let bp = ui.painter_at(bar_rect);
+                    let steps = 22usize;
+                    let sw = bar_w / (steps as f32);
+                    for s in 0..steps {
+                        let t = (s as f32) / ((steps - 1) as f32);
+                        let seg_r = egui::Rect::from_min_size(
+                            egui::pos2(bar_rect.left() + (s as f32) * sw, bar_rect.top()),
+                            Vec2::new(sw + 0.6, bar_rect.height()),
+                        );
+                        bp.rect_filled(seg_r, 0.0, perceptual_cartogram_color(t));
+                    }
+                    bp.rect_stroke(bar_rect, 2.0, Stroke::new(0.8_f32, Color32::from_rgb(71, 85, 105)));
+                    ui.label(RichText::new(format!("{max_rate:.1}/100k")).small().monospace());
+                });
 
                 if let Some(sel) = self
                     .jurisdictions
@@ -1996,10 +2199,7 @@ impl EpiLedgerGuiApp {
                         ))
                         .strong(),
                     );
-                    ui.label(format!(
-                        "2025 Cases: {} ({:.2}/100k) | 2024 Cases: {} ({:.2}/100k)",
-                        sel.cases_2025, sel.rate_2025, sel.cases_2024, sel.rate_2024
-                    ));
+                    ui.label(format_spatial_jurisdiction_summary(sel, self.suppression_policy));
                 }
             });
 
@@ -2066,7 +2266,12 @@ impl EpiLedgerGuiApp {
                                 if ui.link(&c.name).clicked() {
                                     self.selected_fips = c.fips.clone();
                                 }
-                                ui.monospace(format!("{:.0}", c.observed_cases));
+                                let obs_cv = CellValue::from_count(
+                                    Some(c.observed_cases),
+                                    false,
+                                    self.suppression_policy,
+                                );
+                                ui.monospace(obs_cv.display_string(0));
                                 ui.monospace(format!("{:.1}", c.expected_cases));
                                 ui.monospace(format!("{:.2}x", c.relative_risk));
                                 ui.monospace(format!("{:.1}", c.kulldorff_llr));
@@ -3163,5 +3368,68 @@ mod tests {
         let logs = epi_store::list_audit_events(&store, 10).expect("list_audit_events");
         assert_eq!(logs[0].action_kind, "COMMIT_VINTAGE");
         assert_eq!(logs[0].target_ref, ds.vintage_id);
+    }
+
+    #[test]
+    fn spatial_formatter_masks_1_to_9_and_unmasks_0_or_ge10() {
+        let rec = JurisdictionRecord {
+            fips: "99".to_string(),
+            abbr: "TS".to_string(),
+            name: "Test State".to_string(),
+            census_pop_2025: 1_000_000,
+            cases_2025: 5,
+            cases_2024: 0,
+            rate_2025: 0.50,
+            rate_2024: 0.0,
+            active_custom_value: None,
+            note: None,
+        };
+        let masked = format_spatial_jurisdiction_summary(&rec, SuppressionPolicy::NchsWonderLe9);
+        assert!(masked.contains("2025 Cases: SUPP (<=9) (SUPP/100k)"), "got {masked}");
+        assert!(!masked.contains("0.50/100k"), "suppressed rate leaked: {masked}");
+        assert!(masked.contains("2024 Cases: 0 (0.00/100k)"), "0-case state must stay unmasked: {masked}");
+
+        let unmasked = format_spatial_jurisdiction_summary(&rec, SuppressionPolicy::Unmasked);
+        assert!(unmasked.contains("2025 Cases: 5 (0.50/100k)"), "got {unmasked}");
+    }
+
+    #[test]
+    fn lazy_pprl_deferral_and_alt_pillar_ctrl_tab_hotkeys() {
+        let ctx = egui::Context::default();
+        let mut app = EpiLedgerGuiApp::new_headless(&ctx, PathBuf::from(":memory:"));
+        // PPRL 600-patient benchmark must NOT run during app construction
+        assert!(app.dp_audit.last_bench.is_none());
+
+        let step_key = |app: &mut EpiLedgerGuiApp, key: egui::Key, modifiers: egui::Modifiers| {
+            let mut raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                modifiers,
+                ..Default::default()
+            };
+            raw.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            });
+            let _ = ctx.run(raw, |c| app.update_ui(c));
+        };
+
+        step_key(&mut app, egui::Key::Num2, egui::Modifiers::ALT);
+        assert_eq!(app.active_tab, ActiveTab::SpatialScan);
+        step_key(&mut app, egui::Key::Tab, egui::Modifiers::CTRL);
+        assert_eq!(app.active_tab, ActiveTab::CrcAndSyndromic);
+        step_key(&mut app, egui::Key::Num4, egui::Modifiers::ALT);
+        assert_eq!(app.active_tab, ActiveTab::ForecastScoringSitrep);
+
+        // Opening Tab 12 triggers lazy PPRL benchmark execution
+        app.active_tab = ActiveTab::DpAuditAndHpc;
+        let _ = ctx.run(egui::RawInput::default(), |c| app.update_ui(c));
+        assert!(app.dp_audit.last_bench.is_some());
+        assert_eq!(app.dp_audit.last_bench.as_ref().unwrap().num_unique_patients, 600);
     }
 }

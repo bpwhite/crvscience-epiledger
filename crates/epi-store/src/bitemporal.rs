@@ -118,7 +118,8 @@ impl EpiStore {
                     entry_kind               TEXT NOT NULL DEFAULT 'RELEASE',
                     mechanism                TEXT NOT NULL DEFAULT 'DISCRETE_LAPLACE',
                     zcdp_rho_spent           REAL NOT NULL DEFAULT 0.0,
-                    cumulative_rho_after     REAL NOT NULL DEFAULT 0.0
+                    cumulative_rho_after     REAL NOT NULL DEFAULT 0.0,
+                    zcdp_delta               REAL NOT NULL DEFAULT 0.0
                 );
 
                 CREATE TABLE IF NOT EXISTS audit_hash_chain (
@@ -154,6 +155,7 @@ impl EpiStore {
             ("mechanism", "ALTER TABLE dp_budget_ledger ADD COLUMN mechanism TEXT NOT NULL DEFAULT 'DISCRETE_LAPLACE'"),
             ("zcdp_rho_spent", "ALTER TABLE dp_budget_ledger ADD COLUMN zcdp_rho_spent REAL NOT NULL DEFAULT 0.0"),
             ("cumulative_rho_after", "ALTER TABLE dp_budget_ledger ADD COLUMN cumulative_rho_after REAL NOT NULL DEFAULT 0.0"),
+            ("zcdp_delta", "ALTER TABLE dp_budget_ledger ADD COLUMN zcdp_delta REAL NOT NULL DEFAULT 0.0"),
         ];
         for (col_name, ddl) in migrations {
             if !cols.contains(col_name) {

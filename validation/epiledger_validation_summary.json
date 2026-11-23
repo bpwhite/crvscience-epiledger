@@ -13,8 +13,8 @@
     "dp_release_1_epsilon": 0.75,
     "dp_release_1_alpha": 0.4723665527410147,
     "dp_release_1_theoretical_rmse": 1.8421383716084423,
-    "dp_release_1_empirical_mae": 0.9723320158102767,
-    "dp_release_1_empirical_rmse": 1.6077873731169026,
+    "dp_release_1_empirical_mae": 0.9920948616600791,
+    "dp_release_1_empirical_rmse": 1.6406399985198103,
     "dp_cumulative_epsilon_after_two_releases": 1.75,
     "dp_budget_cap": 2.0,
     "budget_overrun_rejected": true,
@@ -49,16 +49,16 @@
   "t3_cori_rt_and_wastewater": {
     "measles_weeks_total": 253,
     "measles_rt_valid_weeks": 129,
-    "measles_rt_peak_mean": 4.717874389684814,
-    "measles_rt_peak_cri_low_95": 3.227022590040765,
-    "measles_rt_peak_cri_high_95": 6.487375912987896,
-    "measles_rt_terminal_mean": 0.7163787740473959,
+    "measles_rt_peak_mean": 4.355977651344105,
+    "measles_rt_peak_cri_low_95": 2.9794854889172306,
+    "measles_rt_peak_cri_high_95": 5.989744990801083,
+    "measles_rt_terminal_mean": 0.7222224588845276,
     "measles_rt_all_intervals_ordered": true,
     "respiratory_ili_weeks": 8,
     "respiratory_used_daily_em_disaggregation": true,
-    "respiratory_rt_terminal_mean": 1.2484218648977605,
-    "respiratory_rt_terminal_cri_low_95": 0.6647320644273498,
-    "respiratory_rt_terminal_cri_high_95": 2.0129923920809705,
+    "respiratory_rt_terminal_mean": 1.2486798109704877,
+    "respiratory_rt_terminal_cri_low_95": 0.6648694098474004,
+    "respiratory_rt_terminal_cri_high_95": 2.013408311968764,
     "wastewater_samples": 10,
     "wastewater_lineages": [
       "JN.1",
@@ -76,6 +76,6 @@
       "S:S31del"
     ],
     "csv_output_path": "validation/cori_rt_and_dp_audit.csv",
-    "csv_bytes": 14957
+    "csv_bytes": 14956
   }
 }

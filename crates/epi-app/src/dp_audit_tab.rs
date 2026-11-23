@@ -119,7 +119,7 @@ impl DpAuditWorkbenchState {
             .map(|p| p.get())
             .unwrap_or(4);
 
-        let mut st = Self {
+        let st = Self {
             mechanism_kind: DpMechanismKind::DiscreteLaplace,
             dp_cfg: DpReleaseConfig::default(),
             zcdp_cfg: ZcdpReleaseConfig::default(),
@@ -136,7 +136,6 @@ impl DpAuditWorkbenchState {
             os_threads,
             last_bench: None,
         };
-        st.run_pprl_benchmark();
         st
     }
 
@@ -200,6 +199,9 @@ impl DpAuditWorkbenchState {
         status_banner: &mut String,
     ) -> Phase8GuiAction {
         let mut action = Phase8GuiAction::default();
+        if self.last_bench.is_none() {
+            self.run_pprl_benchmark();
+        }
         self.spent_epsilon =
             get_vintage_spent_epsilon(store, &active_dataset.vintage_id).unwrap_or(0.0);
         self.spent_rho = get_vintage_spent_rho(store, &active_dataset.vintage_id).unwrap_or(0.0);

@@ -56,7 +56,9 @@ pub struct CoriRtSeries {
     pub used_daily_em_disaggregation: bool,
 }
 
-/// Build normalized discrete Gamma serial interval weights `w(1..=max_steps)` (`w(0) = 0`).
+/// Build normalized discrete Gamma serial interval weights `w(1..=max_steps)` (`w(0) = 0`)
+/// using Cori et al. (2013, *Am J Epidemiol* / `EpiEstim::discr_si`) shifted triangular-tent integration:
+/// `w_s = int_{s-1}^{s+1} (1 - |u - s|) * f_Gamma(u) du`, capturing `[0, 0.5]` mass cleanly.
 pub fn build_discrete_gamma_si(
     mean_days: f64,
     sd_days: f64,
@@ -69,18 +71,30 @@ pub fn build_discrete_gamma_si(
     let rate = mu / (sigma * sigma);
 
     let mut weights = vec![0.0; max_steps + 1];
-    let sub = 16usize;
+    let sub = 24usize;
     let mut sum = 0.0;
 
     for s in 1..=max_steps {
-        let low = ((s as f64) - 0.5).max(1e-4);
-        let high = (s as f64) + 0.5;
-        let h = (high - low) / (sub as f64);
-        let mut area = 0.5 * (gamma_pdf(low, shape, rate) + gamma_pdf(high, shape, rate));
+        let s_f = s as f64;
+        // Left half [s - 1, s] with linear weight (u - (s - 1))
+        let lo1 = (s_f - 1.0).max(1e-5);
+        let hi1 = s_f;
+        let h1 = (hi1 - lo1) / (sub as f64);
+        let tent_left = |u: f64| (u - (s_f - 1.0)).max(0.0) * gamma_pdf(u, shape, rate);
+        let mut area1 = 0.5 * (tent_left(lo1) + tent_left(hi1));
         for k in 1..sub {
-            area += gamma_pdf(low + (k as f64) * h, shape, rate);
+            area1 += tent_left(lo1 + (k as f64) * h1);
         }
-        let w = area * h;
+        // Right half [s, s + 1] with linear weight ((s + 1) - u)
+        let lo2 = s_f;
+        let hi2 = s_f + 1.0;
+        let h2 = (hi2 - lo2) / (sub as f64);
+        let tent_right = |u: f64| ((s_f + 1.0) - u).max(0.0) * gamma_pdf(u, shape, rate);
+        let mut area2 = 0.5 * (tent_right(lo2) + tent_right(hi2));
+        for k in 1..sub {
+            area2 += tent_right(lo2 + (k as f64) * h2);
+        }
+        let w = area1 * h1 + area2 * h2;
         weights[s] = w;
         sum += w;
     }
@@ -295,5 +309,19 @@ mod tests {
         assert!(res.estimates[7].is_none());
         assert!(res.estimates[8].is_none());
         assert!(res.estimates[12].is_some());
+    }
+
+    #[test]
+    fn test_cori_shifted_si_captures_sub_half_step_mass() {
+        // Mean 0.25 steps (e.g., 1.75 days on a 7-day grid) places substantial mass in [0, 0.5].
+        let w = build_discrete_gamma_si(1.75, 0.70, 7.0, 6);
+        assert_eq!(w[0], 0.0);
+        assert!(
+            w[1] > 0.90,
+            "Cori (2013) triangular SI should capture [0, 0.5] mass into w[1], got {:?}",
+            w
+        );
+        let total: f64 = w.iter().skip(1).sum();
+        assert!((total - 1.0).abs() < 1e-12);
     }
 }

@@ -67,6 +67,7 @@ pub struct DpBudgetLedgerEntry {
     pub mechanism: String,
     pub zcdp_rho_spent: f64,
     pub cumulative_rho_after: f64,
+    pub zcdp_delta: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +78,7 @@ pub struct DpReleaseConfig {
     pub sensitivity_l1: f64,
     /// Maximum cumulative `epsilon` allowed on a single vintage before refusing release.
     pub max_budget_cap: f64,
-    /// Optional deterministic seed (`None` mixes OS timestamp + vintage ID via HMAC-SHA256).
+    /// Optional deterministic seed (`None` draws 256-bit secret entropy from the OS CSPRNG).
     pub deterministic_seed: Option<u64>,
 }
 
@@ -119,7 +120,7 @@ pub struct ZcdpReleaseConfig {
     pub max_rho_cap: f64,
     /// Maximum cumulative converted `epsilon` allowed on a single vintage.
     pub max_budget_cap: f64,
-    /// Optional deterministic seed (`None` mixes OS timestamp + vintage ID via HMAC-SHA256).
+    /// Optional deterministic seed (`None` draws 256-bit secret entropy from the OS CSPRNG).
     pub deterministic_seed: Option<u64>,
 }
 
@@ -441,7 +442,7 @@ pub fn list_dp_budget_entries(
         .prepare(
             "SELECT entry_id, vintage_id, released_at_epoch, epsilon_spent, sensitivity_l1,
                     cumulative_epsilon_after, max_budget_cap, empirical_mae, output_checksum_hex,
-                    entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after
+                    entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after, zcdp_delta
              FROM dp_budget_ledger
              ORDER BY entry_id DESC
              LIMIT ?1",
@@ -464,6 +465,7 @@ pub fn list_dp_budget_entries(
                 mechanism: r.get(10)?,
                 zcdp_rho_spent: r.get(11)?,
                 cumulative_rho_after: r.get(12)?,
+                zcdp_delta: r.get(13)?,
             })
         })
         .map_err(|e| EpiError::Storage(e.to_string()))?;
@@ -497,12 +499,30 @@ pub fn reset_vintage_dp_budget(store: &EpiStore, vintage_id: &str) -> Result<Aud
         .execute(
             "INSERT INTO dp_budget_ledger
              (vintage_id, released_at_epoch, epsilon_spent, sensitivity_l1, cumulative_epsilon_after,
-              max_budget_cap, empirical_mae, output_checksum_hex, entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after)
-             VALUES (?1, ?2, 0.0, 0.0, 0.0, 0.0, 0.0, ?3, 'RESET', 'GOVERNANCE_RESET', 0.0, 0.0)",
+              max_budget_cap, empirical_mae, output_checksum_hex, entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after, zcdp_delta)
+             VALUES (?1, ?2, 0.0, 0.0, 0.0, 0.0, 0.0, ?3, 'RESET', 'GOVERNANCE_RESET', 0.0, 0.0, 0.0)",
             params![vintage_id, ts, tag],
         )
         .map_err(|e| EpiError::Storage(e.to_string()))?;
     Ok(audit)
+}
+
+fn build_dp_hmac_key(
+    domain_tag: &str,
+    vintage_id: &str,
+    param: f64,
+    deterministic_seed: Option<u64>,
+) -> Result<Vec<u8>, EpiError> {
+    let mut key = format!("{domain_tag}:{vintage_id}:{param:.6}:").into_bytes();
+    if let Some(seed) = deterministic_seed {
+        key.extend_from_slice(&seed.to_le_bytes());
+    } else {
+        let mut csprng_bytes = [0u8; 32];
+        getrandom::getrandom(&mut csprng_bytes)
+            .map_err(|e| EpiError::Storage(format!("OS CSPRNG entropy error: {e}")))?;
+        key.extend_from_slice(&csprng_bytes);
+    }
+    Ok(key)
 }
 
 /// Sample an exact integer draw `Z` from the Two-Sided Geometric (`Discrete Laplace`) distribution
@@ -586,20 +606,14 @@ pub fn release_differentially_private_series(
     let theoretical_rmse = (2.0 * alpha).sqrt() / (1.0 - alpha).max(1e-9);
 
     let ts = now_epoch_secs();
-    let seed_val = cfg
-        .deterministic_seed
-        .unwrap_or_else(|| (ts as u64) ^ 0xA5A5_5A5A_D901_2026);
-    let key_material = format!(
-        "DP_CTR_KEY:{}:{}:{:.6}",
-        dataset.vintage_id, seed_val, eps
-    );
+    let key_material = build_dp_hmac_key("DP_CTR_KEY", &dataset.vintage_id, eps, cfg.deterministic_seed)?;
 
     let mut noisy_points = Vec::with_capacity(dataset.points.len());
     let mut abs_err_sum = 0.0;
     let mut sq_err_sum = 0.0;
 
     for (idx, pt) in dataset.points.iter().enumerate() {
-        let z = sample_discrete_laplace_ctr(key_material.as_bytes(), idx as u64, alpha);
+        let z = sample_discrete_laplace_ctr(&key_material, idx as u64, alpha);
         // Post-processing projection to non-negative integer counts preserves exact epsilon-DP
         let true_c = pt.count.max(0.0).round();
         let noisy_c = ((true_c as i64) + z).max(0) as f64;
@@ -631,14 +645,17 @@ pub fn release_differentially_private_series(
         points: noisy_points,
     };
 
+    // Pure eps-DP Discrete Laplace satisfies exact rho-zCDP with rho = eps^2 / 2 (Bun & Steinke 2016 Prop 1.4).
     let prior_rho = get_vintage_spent_rho(store, &dataset.vintage_id)?;
+    let laplace_rho = 0.5 * eps * eps;
+    let new_cum_rho = prior_rho + laplace_rho;
     store
         .conn()
         .execute(
             "INSERT INTO dp_budget_ledger
              (vintage_id, released_at_epoch, epsilon_spent, sensitivity_l1, cumulative_epsilon_after,
-              max_budget_cap, empirical_mae, output_checksum_hex, entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'RELEASE', 'DISCRETE_LAPLACE', 0.0, ?9)",
+              max_budget_cap, empirical_mae, output_checksum_hex, entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after, zcdp_delta)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'RELEASE', 'DISCRETE_LAPLACE', ?9, ?10, 0.0)",
             params![
                 dataset.vintage_id,
                 ts,
@@ -648,7 +665,8 @@ pub fn release_differentially_private_series(
                 cfg.max_budget_cap,
                 emp_mae,
                 out_hash,
-                prior_rho
+                laplace_rho,
+                new_cum_rho
             ],
         )
         .map_err(|e| EpiError::Storage(e.to_string()))?;
@@ -659,7 +677,7 @@ pub fn release_differentially_private_series(
         "DP_RELEASE",
         &dataset.vintage_id,
         &format!(
-            "DiscreteLaplace eps={eps:.3} sens={sens:.1} cum_eps={new_cum:.3}/{:.3} mae={emp_mae:.2} out_hash={out_hash}",
+            "DiscreteLaplace eps={eps:.3} rho={laplace_rho:.4} sens={sens:.1} cum_eps={new_cum:.3}/{:.3} mae={emp_mae:.2} out_hash={out_hash}",
             cfg.max_budget_cap
         ),
     )?;
@@ -709,10 +727,42 @@ pub fn release_discrete_gaussian_zcdp_series(
     }
 
     let prior_eps = get_vintage_spent_epsilon(store, &dataset.vintage_id)?;
-    let cum_zcdp_eps = zcdp_rho_to_epsilon(new_cum_rho, delta);
-    let prev_zcdp_eps = zcdp_rho_to_epsilon(prior_rho, delta);
-    let marginal_eps = (cum_zcdp_eps - prev_zcdp_eps).max(0.0);
-    let new_cum_eps = prior_eps + marginal_eps;
+    let has_differing_delta: bool = {
+        let mut stmt = store
+            .conn()
+            .prepare(
+                "SELECT zcdp_delta FROM dp_budget_ledger
+                 WHERE vintage_id = ?1
+                   AND zcdp_delta > 0.0
+                   AND entry_id > COALESCE(
+                       (SELECT MAX(entry_id) FROM dp_budget_ledger
+                        WHERE vintage_id = ?1
+                          AND (entry_kind = 'RESET' OR output_checksum_hex LIKE 'RESET%')),
+                       0
+                   )",
+            )
+            .map_err(|e| EpiError::Storage(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![&dataset.vintage_id], |r| r.get::<_, f64>(0))
+            .map_err(|e| EpiError::Storage(e.to_string()))?;
+        let mut diff = false;
+        for d in rows {
+            if (d.map_err(|e| EpiError::Storage(e.to_string()))? - delta).abs() > 1e-12 {
+                diff = true;
+                break;
+            }
+        }
+        diff
+    };
+    let single_eps = zcdp_rho_to_epsilon(rho, delta);
+    let (marginal_eps, cum_zcdp_eps) = if has_differing_delta {
+        (single_eps, prior_eps + single_eps)
+    } else {
+        let bound = (prior_eps + single_eps).min(zcdp_rho_to_epsilon(new_cum_rho, delta));
+        let marg = (bound - prior_eps).max(0.0);
+        (marg, prior_eps + marg)
+    };
+    let new_cum_eps = cum_zcdp_eps;
     if new_cum_eps > cfg.max_budget_cap + 1e-9 {
         return Err(EpiError::Schema(format!(
             "Converted epsilon budget exhausted for '{}': prior={prior_eps:.3} + marginal={marginal_eps:.3} exceeds cap={:.3}",
@@ -722,20 +772,14 @@ pub fn release_discrete_gaussian_zcdp_series(
 
     let sigma = sens / (2.0 * rho).sqrt();
     let ts = now_epoch_secs();
-    let seed_val = cfg
-        .deterministic_seed
-        .unwrap_or_else(|| (ts as u64) ^ 0x5A17_C0D3_9E37_79B9);
-    let key_material = format!(
-        "ZCDP_DG_KEY:{}:{}:{:.6}",
-        dataset.vintage_id, seed_val, rho
-    );
+    let key_material = build_dp_hmac_key("ZCDP_DG_KEY", &dataset.vintage_id, rho, cfg.deterministic_seed)?;
 
     let mut noisy_points = Vec::with_capacity(dataset.points.len());
     let mut abs_err_sum = 0.0;
     let mut sq_err_sum = 0.0;
 
     for (idx, pt) in dataset.points.iter().enumerate() {
-        let z = sample_discrete_gaussian_ctr(key_material.as_bytes(), idx as u64, sigma);
+        let z = sample_discrete_gaussian_ctr(&key_material, idx as u64, sigma);
         let true_c = pt.count.max(0.0).round();
         let noisy_c = ((true_c as i64) + z).max(0) as f64;
         let diff = noisy_c - pt.count.max(0.0);
@@ -779,8 +823,8 @@ pub fn release_discrete_gaussian_zcdp_series(
         .execute(
             "INSERT INTO dp_budget_ledger
              (vintage_id, released_at_epoch, epsilon_spent, sensitivity_l1, cumulative_epsilon_after,
-              max_budget_cap, empirical_mae, output_checksum_hex, entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'RELEASE', 'DISCRETE_GAUSSIAN_ZCDP', ?9, ?10)",
+              max_budget_cap, empirical_mae, output_checksum_hex, entry_kind, mechanism, zcdp_rho_spent, cumulative_rho_after, zcdp_delta)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'RELEASE', 'DISCRETE_GAUSSIAN_ZCDP', ?9, ?10, ?11)",
             params![
                 dataset.vintage_id,
                 ts,
@@ -791,7 +835,8 @@ pub fn release_discrete_gaussian_zcdp_series(
                 emp_mae,
                 out_hash,
                 rho,
-                new_cum_rho
+                new_cum_rho,
+                delta
             ],
         )
         .map_err(|e| EpiError::Storage(e.to_string()))?;
@@ -1027,5 +1072,55 @@ mod tests {
         assert_eq!(entries_after.len(), 2);
         assert_eq!(entries_after[0].entry_id, existing_id);
         assert_eq!(entries_after[0].output_checksum_hex, orig_checksum);
+    }
+
+    #[test]
+    fn test_csprng_non_deterministic_dp_releases_differ_same_second_and_laplace_records_zcdp_rho() {
+        let mut store = EpiStore::open_in_memory().unwrap();
+        let ds = builtin_measles_weekly_dataset();
+        store.commit_vintage(&ds).unwrap();
+
+        let lap_cfg = DpReleaseConfig {
+            epsilon: 0.60,
+            sensitivity_l1: 1.0,
+            max_budget_cap: 10.0,
+            deterministic_seed: None,
+        };
+        let r1 = release_differentially_private_series(&store, &ds, &lap_cfg).unwrap();
+        let r2 = release_differentially_private_series(&store, &ds, &lap_cfg).unwrap();
+        assert_ne!(
+            r1.noisy_dataset.checksum_hex, r2.noisy_dataset.checksum_hex,
+            "Same-second deterministic_seed=None Laplace calls must draw distinct CSPRNG noise"
+        );
+
+        let expected_lap_rho = 0.5 * 0.60 * 0.60;
+        assert!(
+            (get_vintage_spent_rho(&store, &ds.vintage_id).unwrap() - 2.0 * expected_lap_rho).abs()
+                < 1e-12
+        );
+
+        let zcdp_cfg = ZcdpReleaseConfig {
+            rho: 0.04,
+            delta: 2.5e-6,
+            sensitivity_l2: 1.0,
+            max_rho_cap: 2.0,
+            max_budget_cap: 20.0,
+            deterministic_seed: None,
+        };
+        let z1 = release_discrete_gaussian_zcdp_series(&store, &ds, &zcdp_cfg).unwrap();
+        let z2 = release_discrete_gaussian_zcdp_series(&store, &ds, &zcdp_cfg).unwrap();
+        assert_ne!(
+            z1.noisy_dataset.checksum_hex, z2.noisy_dataset.checksum_hex,
+            "Same-second deterministic_seed=None zCDP calls must draw distinct CSPRNG noise"
+        );
+
+        let rows = list_dp_budget_entries(&store, 10).unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!((rows[0].zcdp_delta - 2.5e-6).abs() < 1e-15);
+        assert!((rows[1].zcdp_delta - 2.5e-6).abs() < 1e-15);
+        assert_eq!(rows[2].zcdp_delta, 0.0);
+        assert!((rows[2].zcdp_rho_spent - expected_lap_rho).abs() < 1e-12);
+        assert_eq!(rows[3].zcdp_delta, 0.0);
+        assert!((rows[3].zcdp_rho_spent - expected_lap_rho).abs() < 1e-12);
     }
 }

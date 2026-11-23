@@ -401,7 +401,8 @@ pub fn calibrate_and_project_seir(
                             r = (r + n_ir + n_vac - n_rs).max(0.0);
                             wk_inf += n_ei;
                         }
-                        let rep_draw = rng.poisson_approx(wk_inf * rep_frac);
+                        let wk_inf_int = wk_inf.round().max(0.0) as u64;
+                        let rep_draw = rng.binomial(wk_inf_int, rep_frac);
                         wk_draws.push(rep_draw);
                         run_cum_rep += rep_draw;
                     }
@@ -536,6 +537,48 @@ impl XorShift64 {
                 .max(0.0)
         }
     }
+
+    fn binomial(&mut self, n_trials: u64, p: f64) -> f64 {
+        let p_clamped = p.clamp(0.0, 1.0);
+        if n_trials == 0 || p_clamped <= 0.0 || !p_clamped.is_finite() {
+            return 0.0;
+        }
+        if p_clamped >= 1.0 {
+            return n_trials as f64;
+        }
+        if n_trials <= 128 {
+            let mut hits = 0u64;
+            for _ in 0..n_trials {
+                if self.next_f64_open01() < p_clamped {
+                    hits += 1;
+                }
+            }
+            return hits as f64;
+        }
+        let flip = p_clamped > 0.5;
+        let p_eff = if flip { 1.0 - p_clamped } else { p_clamped };
+        let n_f = n_trials as f64;
+        if n_f * p_eff < 25.0 {
+            // Exact Devroye waiting-time geometric Binomial sampler
+            let log_q = (1.0 - p_eff).ln();
+            let mut x = 0u64;
+            let mut sum = 0u64;
+            loop {
+                let u = self.next_f64_open01();
+                let geom = (u.ln() / log_q).floor() as u64 + 1;
+                sum = sum.saturating_add(geom);
+                if sum > n_trials {
+                    break;
+                }
+                x += 1;
+            }
+            let drawn = if flip { n_trials - x } else { x };
+            return drawn as f64;
+        }
+        let mean = n_f * p_clamped;
+        let sd = (n_f * p_clamped * (1.0 - p_clamped)).sqrt();
+        (mean + sd * self.standard_normal()).round().clamp(0.0, n_f)
+    }
 }
 
 #[cfg(test)]
@@ -562,6 +605,43 @@ mod tests {
         for step in &r1.steps {
             let sum_pop = step.susceptible + step.exposed + step.infectious + step.recovered;
             assert!((sum_pop - 1_000_000.0).abs() < 1.0);
+        }
+    }
+
+    #[test]
+    fn test_seir_binomial_reporting_never_exceeds_true_infections() {
+        let mut rng = XorShift64::new(2026_09);
+        for &n_inf in &[0u64, 1, 5, 18, 120, 500, 10_000] {
+            for &p in &[0.0, 0.15, 0.50, 0.75, 0.99, 1.0] {
+                for _ in 0..40 {
+                    let drawn = rng.binomial(n_inf, p);
+                    assert!(
+                        drawn >= 0.0 && drawn <= (n_inf as f64),
+                        "Binomial({n_inf}, {p}) drew {drawn} > {n_inf}"
+                    );
+                }
+            }
+        }
+
+        let history = vec![6.0, 10.0, 14.0, 20.0, 28.0, 35.0];
+        let cfg = SeirConfig {
+            population: 100_000.0,
+            initial_immune_fraction: 0.50,
+            r0: 3.5,
+            reporting_fraction: 0.75,
+            auto_calibrate_r0_from_rt: false,
+            horizon_weeks: 8,
+            ensemble_runs: 120,
+            ..Default::default()
+        };
+        let res = calibrate_and_project_seir(&history, false, None, &cfg);
+        for s in &res.steps {
+            assert!(
+                s.reported_weekly_mean <= s.true_weekly_infections + 1e-9,
+                "reported mean {} exceeded true infections {}",
+                s.reported_weekly_mean,
+                s.true_weekly_infections
+            );
         }
     }
 }
