@@ -240,8 +240,13 @@ fn insert_field_unpadded_bigrams(
         msg.push((pos_bucket / 3) as u8);
 
         let mac = hmac_sha256(secret_key, &msg);
-        let h1 = u64::from_le_bytes(mac[0..8].try_into().unwrap()) as usize;
-        let h2 = (u64::from_le_bytes(mac[8..16].try_into().unwrap()) as usize) | 1;
+        let h1 = u64::from_le_bytes([
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mac[6], mac[7],
+        ]) as usize;
+        let h2 = (u64::from_le_bytes([
+            mac[8], mac[9], mac[10], mac[11], mac[12], mac[13], mac[14], mac[15],
+        ]) as usize)
+            | 1;
 
         for i in 0..k_hashes {
             let bit = (h1.wrapping_add(i.wrapping_mul(h2)).wrapping_add(i * i)) & 511;

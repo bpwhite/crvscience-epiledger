@@ -658,7 +658,8 @@ pub fn builtin_outbreak_fasta_and_metadata() -> (String, String) {
                 v[pos] = ch;
             }
         }
-        String::from_utf8(v).unwrap()
+        String::from_utf8(v)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
     };
 
     let s01 = mutate(&base_c1, &[]);
@@ -699,7 +700,8 @@ pub fn builtin_outbreak_fasta_and_metadata() -> (String, String) {
     for slot in low_cov.iter_mut().take(50) {
         *slot = b'N';
     }
-    let s14 = String::from_utf8(low_cov).unwrap();
+    let s14 = String::from_utf8(low_cov)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
 
     let fasta = format!(
         ">MSL-01\n{s01}\n>MSL-02\n{s02}\n>MSL-03\n{s03}\n>MSL-04\n{s04}\n>MSL-05\n{s05}\n>MSL-06\n{s06}\n>MSL-07\n{s07}\n>MSL-08\n{s08}\n>MSL-09\n{s09}\n>MSL-10\n{s10}\n>MSL-11\n{s11}\n>MSL-12\n{s12}\n>MSL-Q13\n{s13}\n>MSL-LC14\n{s14}\n"

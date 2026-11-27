@@ -307,7 +307,10 @@ pub fn compute_delay_adjusted_cfr(
         });
     }
 
-    let last = trajectory.last().unwrap().clone();
+    let last = trajectory
+        .last()
+        .cloned()
+        .ok_or_else(|| EpiError::Schema("CFR trajectory produced no points".to_string()))?;
     Ok(DelayAdjustedCfrResult {
         config: cfg.clone(),
         final_cumulative_cases: last.cumulative_cases,

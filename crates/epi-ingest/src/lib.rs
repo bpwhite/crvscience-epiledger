@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+#![forbid(unsafe_code)]
+
 pub mod cdc_soda;
 pub mod cmu_delphi;
 pub mod fhir_r4;

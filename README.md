@@ -13,11 +13,11 @@ Ships with **three execution interfaces** in a single `epiledger` binary:
 
 | Crate | Path | Key Capabilities |
 | :--- | :--- | :--- |
-| `epi-core` | `crates/epi-core` | CDC `MmwrWeek` calendar math, `SuppressionPolicy::NchsWonderLe9` (`<=9`) masking (`CellValue`), SNOMED-CT/ICD-10/LOINC enums, embedded CDC US Measles & State Pertussis baselines |
-| `epi-store` | `crates/epi-store` | Bundled SQLite WAL (`EpiStore`), CSPRNG-keyed HMAC-SHA256 Discrete Laplace ($\varepsilon$-DP) & Canonne–Kamath–Steinke Discrete Gaussian ($\rho$-zCDP) with $\rho = \varepsilon^2 / 2$ accounting and per-row `zcdp_delta` persistence, tamper-evident SHA-256 hash chain, and hash-blocked 512-bit Bloom PPRL |
-| `epi-ingest` | `crates/epi-ingest` | CDC SODA (`NNDSS`, `NWSS`), CMU Delphi FluView, openFDA FAERS, WHO GHO OData, HL7 v2.5.1 ELR, deterministic NSSP ESSENCE `NegEx`, HL7 FHIR R4, GeoJSON, and pure-Rust SAS Transport v5 (`.XPT`) `IBM370` decoder |
-| `epi-analytics` | `crates/epi-analytics` | Cori (2013) shifted triangular-tent $R_t$ + daily EM disaggregation, Farrington/EARS aberration detection, right-truncation delay nowcasting, scoped-parallel RK4 + Binomial tau-leaping SEIR/SEIRS (`reported <= true_weekly_infections`), $K=11$ WIS ensembles, Lloyd-Smith $k$ MLE, Freyja $L_1$ wastewater demixing, `CLSI M39` antibiograms, 3-source CRC, Nishiura cCFR, Gasparrini DLNM, EuroMOMO, Kulldorff spatial scan, NHANES survey variance, FAERS PRR/ROR/IC |
-| `epi-app` | `crates/epi-app` | 16-tab `egui`/`egui_plot` desktop app (responsive perceptual US cartogram, shaded 95% CrI $R_t$ bands, debounced SEIR sliders, lazy Tab 12 PPRL benchmark), 8-screen `ratatui` TUI, SitRep HTML/SVG export, and CLI |
+| `epi-core` | `crates/epi-core` | `#![forbid(unsafe_code)]` core safety; CDC `MmwrWeek` calendar math, `SuppressionPolicy::NchsWonderLe9` (`<=9`) masking (`CellValue`), SNOMED-CT/ICD-10/LOINC enums, embedded CDC US Measles & State Pertussis baselines |
+| `epi-store` | `crates/epi-store` | `#![forbid(unsafe_code)]` core safety; bundled SQLite WAL (`EpiStore`), CSPRNG-keyed HMAC-SHA256 Discrete Laplace ($\varepsilon$-DP) & Canonne–Kamath–Steinke Discrete Gaussian ($\rho$-zCDP) with $\rho = \varepsilon^2 / 2$ accounting and per-row `zcdp_delta` persistence, tamper-evident SHA-256 hash chain, and hash-blocked 512-bit Bloom PPRL |
+| `epi-ingest` | `crates/epi-ingest` | `#![forbid(unsafe_code)]` core safety; CDC SODA (`NNDSS`, `NWSS`), CMU Delphi FluView, openFDA FAERS, WHO GHO OData, HL7 v2.5.1 ELR, deterministic NSSP ESSENCE `NegEx`, HL7 FHIR R4, GeoJSON, and pure-Rust SAS Transport v5 (`.XPT`) `IBM370` decoder |
+| `epi-analytics` | `crates/epi-analytics` | `#![forbid(unsafe_code)]` core safety; Cori (2013) shifted triangular-tent $R_t$ + daily EM disaggregation, multi-jurisdiction DP $R_t$ & surge comparative risk digest (`JSON`/`CSV`), Farrington/EARS aberration detection, right-truncation delay nowcasting, scoped-parallel RK4 + Binomial tau-leaping SEIR/SEIRS (`reported <= true_weekly_infections`), $K=11$ WIS ensembles, Lloyd-Smith $k$ MLE, Freyja $L_1$ wastewater demixing, `CLSI M39` antibiograms, 3-source CRC, Nishiura cCFR, Gasparrini DLNM, EuroMOMO, Kulldorff spatial scan, NHANES survey variance, FAERS PRR/ROR/IC |
+| `epi-app` | `crates/epi-app` | `#![deny(unsafe_code)]` binary crate (`#[allow(unsafe_code)]` strictly scoped to Win32 `AttachConsole`); 16-tab `egui`/`egui_plot` desktop app (responsive perceptual US cartogram, shaded 95% CrI $R_t$ bands, debounced SEIR sliders, lazy Tab 12 PPRL benchmark, multi-jurisdiction DP risk digest), 8-screen `ratatui` TUI, SitRep HTML/SVG export, and `40`-subcommand CLI |
 
 ## Controls & Keyboard Hotkeys (GUI)
 
@@ -41,18 +41,19 @@ Ships with **three execution interfaces** in a single `epiledger` binary:
 | `vintages` / `analyze` | `[vintage_id]` | List SQLite vintages; run Cori $R_t$ & Farrington GLM |
 | `nowcast` / `seir-forecast` | `[vid] [delay_wk]` / `[vid] [weeks] [trajectories]` | Right-truncation nowcast & Binomial SEIR forecast |
 | `backtest-wis` / `export-sitrep` | `[vid] [horizon] [origins]` / `[vid] [out.html] [mask]` | $K=11$ WIS ensemble & standalone HTML5/SVG SitRep |
-| `dp-release` / `audit-verify` | `[vid] [eps] [cap] [out.csv]` / `[limit]` | CSPRNG Discrete Laplace release & SHA-256 chain verification |
+| `dp-release` / `dp-risk-digest` | `[vid] [eps] [cap] [out.csv]` / `[campaign] [eps] [json] [csv]` | CSPRNG Discrete Laplace release & multi-jurisdiction DP $R_t$ + ICU surge comparative risk digest |
+| `audit-verify` | `[limit]` | SHA-256 tamper-evident audit chain verification |
 | `pprl-bench` / `pprl-link` | `[num_patients] [blocked\|cartesian]` / `[dice] [days]` | LSH + Birth-Year blocked PPRL & Fellegi–Sunter EM |
 | `offspring-k` / `contact-network` | `[csv\|builtin] [all\|ztnb]` / `[csv\|builtin] [out.dot]` | Negative Binomial $k$ MLE & bipartite contact networks |
 | `wastewater-demix` / `antibiogram` | `[snv.csv\|builtin] [log2\|sqrt]` / `[amr.csv\|builtin] [dedup\|raw]` | Freyja $L_1$ SNV deconvolution & CLSI M39 antibiograms |
 | `fetch-nndss` / `fetch-nwss` / `fetch-delphi` / `fetch-faers` / `fetch-who` | Provider query arguments | Keyless live surveillance ingestion with SQLite cache |
 
-Run `epiledger --help` for all 39 CLI subcommands.
+Run `epiledger --help` for all 40 CLI subcommands.
 
 ## Build, Tests & Headless Validation
 
 ```bash
-cargo test --workspace
+cargo test --workspace --release   # 64 tests passing across all 5 crates + headless validation
 cargo run --release -p epi-app
 cargo run --release -p epi-app -- tui
 cargo test -p epi-analytics --test headless_validation -- --nocapture

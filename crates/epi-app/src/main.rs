@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![deny(unsafe_code)]
 
 mod cartogram;
 mod cli;
@@ -37,6 +38,7 @@ use std::sync::Arc;
 const APP_ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon_64x64.rgba"));
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn attach_parent_console_if_cli() {
     if std::env::args_os().len() > 1 {
         const ATTACH_PARENT_PROCESS: u32 = u32::MAX;

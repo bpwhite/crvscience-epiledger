@@ -15,7 +15,15 @@
 
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use epi_core::{parse_flexible_date_to_mmwr, CellValue, SuppressionPolicy, TimeSeriesDataset};
+use epi_analytics::{
+    builtin_multi_jurisdiction_dp_inputs_for_campaign, compute_multi_jurisdiction_dp_risk_digest,
+    export_dp_risk_digest_csv, export_dp_risk_digest_json, DpRiskDigestConfig, DpRiskTier,
+    MultiJurisdictionDpRiskDigest,
+};
+use epi_core::{
+    parse_flexible_date_to_mmwr, CellValue, SuppressionPolicy, SurveillanceCampaignPreset,
+    TimeSeriesDataset,
+};
 use epi_store::{
     encode_pprl_record, generate_synthetic_pprl_scale_benchmark, get_vintage_spent_epsilon,
     get_vintage_spent_rho, link_and_deduplicate_pprl, list_audit_events, list_dp_budget_entries,
@@ -100,6 +108,11 @@ pub struct DpAuditWorkbenchState {
     pub bench_use_blocking: bool,
     pub os_threads: usize,
     pub last_bench: Option<PprlScaleBenchReport>,
+
+    pub risk_digest_campaign: SurveillanceCampaignPreset,
+    pub risk_digest_eps: f64,
+    pub risk_digest_seed: u64,
+    pub last_risk_digest: Option<MultiJurisdictionDpRiskDigest>,
 }
 
 impl DpAuditWorkbenchState {
@@ -135,8 +148,25 @@ impl DpAuditWorkbenchState {
             bench_use_blocking: true,
             os_threads,
             last_bench: None,
+            risk_digest_campaign: SurveillanceCampaignPreset::UsMeasles2022_2026,
+            risk_digest_eps: 0.75,
+            risk_digest_seed: 2026_1127,
+            last_risk_digest: None,
         };
         st
+    }
+
+    pub fn run_risk_digest(&mut self) -> Result<(), String> {
+        let inputs = builtin_multi_jurisdiction_dp_inputs_for_campaign(self.risk_digest_campaign);
+        let cfg = DpRiskDigestConfig {
+            epsilon_per_jurisdiction: self.risk_digest_eps,
+            deterministic_seed: Some(self.risk_digest_seed),
+            ..Default::default()
+        };
+        let digest =
+            compute_multi_jurisdiction_dp_risk_digest(&inputs, &cfg).map_err(|e| e.to_string())?;
+        self.last_risk_digest = Some(digest);
+        Ok(())
     }
 
     pub fn refresh_from_store(&mut self, store: &EpiStore, active_vintage_id: &str) {
@@ -765,6 +795,124 @@ impl DpAuditWorkbenchState {
                     });
                 });
             });
+        });
+
+        ui.add_space(6.0);
+        ui.group(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Multi-Jurisdiction DP Rt & Surge Comparative Risk Digest");
+                ui.separator();
+                egui::ComboBox::from_id_source("dp_risk_digest_campaign")
+                    .selected_text(self.risk_digest_campaign.label())
+                    .show_ui(ui, |ui| {
+                        for preset in SurveillanceCampaignPreset::ALL {
+                            ui.selectable_value(
+                                &mut self.risk_digest_campaign,
+                                preset,
+                                preset.label(),
+                            );
+                        }
+                    });
+                ui.add(
+                    egui::Slider::new(&mut self.risk_digest_eps, 0.10..=2.50)
+                        .text("Eps / Jurisdiction"),
+                );
+                if ui.button("Compute DP Risk Digest").clicked() {
+                    match self.run_risk_digest() {
+                        Ok(()) => {
+                            if let Some(ref d) = self.last_risk_digest {
+                                *status_banner = format!(
+                                    "Computed DP Risk Digest ({} jurisdictions, total eps={:.2}, elevated/critical={}, top={}).",
+                                    d.jurisdiction_count,
+                                    d.total_epsilon_spent,
+                                    d.elevated_or_critical_count,
+                                    d.highest_risk_jurisdiction.as_deref().unwrap_or("--")
+                                );
+                            }
+                        }
+                        Err(err) => *status_banner = format!("DP Risk Digest error: {err}"),
+                    }
+                }
+                if let Some(ref digest) = self.last_risk_digest {
+                    if ui.button("Export Digest JSON").clicked() {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .set_file_name("epiledger_dp_risk_digest.json")
+                            .save_file()
+                        {
+                            match std::fs::write(&p, export_dp_risk_digest_json(digest)) {
+                                Ok(()) => {
+                                    *status_banner =
+                                        format!("Exported DP Risk Digest JSON to {}", p.display());
+                                }
+                                Err(err) => *status_banner = format!("JSON export error: {err}"),
+                            }
+                        }
+                    }
+                    if ui.button("Export Digest CSV").clicked() {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .set_file_name("epiledger_dp_risk_digest.csv")
+                            .save_file()
+                        {
+                            match std::fs::write(&p, export_dp_risk_digest_csv(digest)) {
+                                Ok(()) => {
+                                    *status_banner =
+                                        format!("Exported DP Risk Digest CSV to {}", p.display());
+                                }
+                                Err(err) => *status_banner = format!("CSV export error: {err}"),
+                            }
+                        }
+                    }
+                }
+            });
+
+            if let Some(ref digest) = self.last_risk_digest {
+                ui.add_space(4.0);
+                ui.monospace(format!(
+                    "Cohort: {} jurisdictions | Total Eps={:.2} | Mean DP Rt={} | Max ICU Util={:.1}% | Elevated/Critical={}",
+                    digest.jurisdiction_count,
+                    digest.total_epsilon_spent,
+                    digest.mean_dp_rt.map(|v| format!("{v:.2}")).unwrap_or_else(|| "--".to_string()),
+                    digest.max_icu_utilization_pct,
+                    digest.elevated_or_critical_count
+                ));
+                egui::ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
+                    egui::Grid::new("dp_risk_digest_grid").striped(true).show(ui, |ui| {
+                        ui.strong("Rank");
+                        ui.strong("ID");
+                        ui.strong("Jurisdiction");
+                        ui.strong("DP Rt [95% CrI]");
+                        ui.strong("4wk Growth");
+                        ui.strong("Peak ICU");
+                        ui.strong("ICU Util");
+                        ui.strong("Risk Score");
+                        ui.strong("Tier");
+                        ui.end_row();
+
+                        for j in &digest.jurisdictions {
+                            let tier_col = match j.risk_tier {
+                                DpRiskTier::Critical => Color32::from_rgb(244, 63, 94),
+                                DpRiskTier::Elevated => Color32::from_rgb(251, 146, 60),
+                                DpRiskTier::Moderate => Color32::from_rgb(251, 191, 36),
+                                DpRiskTier::Low => Color32::from_rgb(52, 211, 153),
+                            };
+                            let rt_str = match (j.dp_rt_latest, j.dp_rt_cri_low_95, j.dp_rt_cri_high_95) {
+                                (Some(m), Some(lo), Some(hi)) => format!("{m:.2} [{lo:.2}, {hi:.2}]"),
+                                _ => "--".to_string(),
+                            };
+                            ui.monospace(format!("#{}", j.rank));
+                            ui.monospace(&j.jurisdiction_id);
+                            ui.label(&j.label);
+                            ui.monospace(rt_str);
+                            ui.monospace(format!("{:.2}x", j.dp_growth_ratio_4wk));
+                            ui.monospace(format!("{:.1}", j.dp_peak_icu_census));
+                            ui.monospace(format!("{:.1}%", j.dp_peak_icu_utilization_pct));
+                            ui.monospace(format!("{:.1}", j.comparative_risk_score));
+                            ui.label(RichText::new(j.risk_tier.as_str()).strong().color(tier_col));
+                            ui.end_row();
+                        }
+                    });
+                });
+            }
         });
 
         action

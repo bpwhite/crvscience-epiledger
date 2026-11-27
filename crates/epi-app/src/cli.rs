@@ -17,15 +17,18 @@ use crate::sitrep_export::{render_standalone_sitrep_html, SitRepContext};
 use epi_analytics::{
     analyze_contact_tracing_network, build_us_state_scan_zones, builtin_age_serosurvey_dataset,
     builtin_all_cause_weekly_mortality_dataset, builtin_emerging_wave_cases_and_deaths,
-    builtin_hospital_amr_isolates, builtin_outbreak_fasta_and_metadata,
+    builtin_hospital_amr_isolates, builtin_multi_jurisdiction_dp_inputs_for_campaign,
+    builtin_outbreak_fasta_and_metadata,
     builtin_respiratory_lineage_table, builtin_superspreading_outbreak_records,
     builtin_three_source_tb_pertussis_crc, builtin_tnd_vaccine_study_dataset,
     builtin_wastewater_barcode_and_samples, builtin_wildfire_pm25_dlnm_dataset,
     calibrate_and_project_seir, compute_aberrations, compute_clsi_m39_antibiogram,
     compute_cori_rt, compute_delay_adjusted_cfr, compute_disproportionality_2x2,
     compute_euromomo_excess_mortality, compute_kulldorff_spatial_clusters,
+    compute_multi_jurisdiction_dp_risk_digest,
     compute_taylor_linearized_mean, compute_two_source_chapman, deconvolve_wastewater_timeseries,
-    estimate_tnd_vaccine_effectiveness, export_bipartite_network_dot, export_outbreak_graphviz_dot,
+    estimate_tnd_vaccine_effectiveness, export_bipartite_network_dot, export_dp_risk_digest_csv,
+    export_dp_risk_digest_json, export_outbreak_graphviz_dot,
     fit_catalytic_seroprevalence, fit_dlnm_quasi_poisson, fit_multinomial_lineage_logistics,
     fit_negative_binomial_offspring, fit_three_source_loglinear_crc, nowcast_parametric_delay,
     parse_amr_isolates_csv, parse_cfr_incidence_deaths_csv, parse_contact_tracing_csv,
@@ -35,7 +38,8 @@ use epi_analytics::{
     parse_serosurvey_csv, parse_wastewater_snv_csv, parse_weekly_mortality_csv,
     reconstruct_outbreak_tree, run_kulldorff_circular_scan, run_rolling_wis_backtest_and_ensemble,
     AberrationConfig, AberrationMethod, AntibiogramConfig, BacktestConfig, CatalyticModelKind,
-    CoriRtConfig, DelayCfrConfig, DepthWeighting, DlnmConfig, ExcessMortalityConfig,
+    CoriRtConfig, DelayCfrConfig, DepthWeighting, DlnmConfig, DpRiskDigestConfig,
+    ExcessMortalityConfig,
     ExposureBasisKind, HospitalSurgeConfig,
     IsolateDeduplicationPolicy, LineageBasisMode, LineageLogisticsConfig, LonelyPsuStrategy,
     MortalityBaselineMode, OffspringFitConfig, OutbreakTreeConfig, ParametricNowcastConfig,
@@ -44,6 +48,7 @@ use epi_analytics::{
 };
 use epi_core::{
     builtin_measles_weekly_dataset, builtin_pertussis_spatial_records, EpiError, SuppressionPolicy,
+    SurveillanceCampaignPreset,
 };
 use epi_ingest::{
     build_syndrome_weekly_dataset, builtin_ed_chief_complaint_encounters,
@@ -135,6 +140,7 @@ pub fn print_cli_help() {
     println!("  epiledger backtest-wis [vid] [horizon] [origins]         Run K=11 WIS backtest & Inverse-WIS ensemble stacking");
     println!("  epiledger export-sitrep [vid] [out.html] [mask]          Export standalone zero-JS HTML5/SVG Situation Report");
     println!("  epiledger dp-release [vid] [eps] [cap] [out.csv]         Release Discrete Laplace DP series & log SQLite budget");
+    println!("  epiledger dp-risk-digest [campaign] [eps] [json] [csv]   Compare multi-jurisdiction DP Rt & ICU surge risk");
     println!("  epiledger audit-verify [limit]                           Verify genesis-to-tip SHA-256 tamper-evident audit chain");
     println!("  epiledger pprl-bench [num_patients] [blocked|cartesian]  Benchmark LSH + Birth-Year hash-blocked PPRL scaling");
     println!("  epiledger offspring-k [z_list|csv|builtin] [all|ztnb]    Fit Negative Binomial R0 & dispersion k MLE + 80/20 share");
@@ -458,6 +464,58 @@ pub fn run_cli(args: &[String], db_path: &Path) -> Result<(), EpiError> {
                 out.empirical_mae,
                 out.audit_entry_hash
             );
+        }
+        "dp-risk-digest" => {
+            let preset_arg = args.get(1).map(String::as_str).unwrap_or("measles");
+            let preset = match preset_arg.to_ascii_lowercase().as_str() {
+                "pertussis" => SurveillanceCampaignPreset::UsPertussis2022_2026,
+                "influenza" | "ili" => SurveillanceCampaignPreset::InfluenzaIliWastewater2022_2026,
+                "sarscov2" | "covid" => SurveillanceCampaignPreset::SarsCoV2VariantCohort2022_2026,
+                _ => SurveillanceCampaignPreset::UsMeasles2022_2026,
+            };
+            let eps: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.75);
+            let inputs = builtin_multi_jurisdiction_dp_inputs_for_campaign(preset);
+            let cfg = DpRiskDigestConfig {
+                epsilon_per_jurisdiction: eps,
+                ..Default::default()
+            };
+            let digest = compute_multi_jurisdiction_dp_risk_digest(&inputs, &cfg)?;
+            if let Some(json_path) = args.get(3).filter(|s| *s != "-" && !s.is_empty()) {
+                std::fs::write(json_path, export_dp_risk_digest_json(&digest))?;
+            }
+            if let Some(csv_path) = args.get(4).filter(|s| *s != "-" && !s.is_empty()) {
+                std::fs::write(csv_path, export_dp_risk_digest_csv(&digest))?;
+            }
+            println!(
+                "Multi-Jurisdiction DP Rt & Surge Risk Digest: {} | Jurisdictions={} | eps/jur={:.2} (total={:.2}) | Elevated/Critical={} | MaxICU={:.1}%",
+                preset.label(),
+                digest.jurisdiction_count,
+                digest.epsilon_per_jurisdiction,
+                digest.total_epsilon_spent,
+                digest.elevated_or_critical_count,
+                digest.max_icu_utilization_pct
+            );
+            println!(
+                "{:<4} {:<8} {:<18} {:>9} {:>10} {:>10} {:>8} {:>10}",
+                "RANK", "ID", "JURISDICTION", "DP_RT", "ICU_UTIL%", "4WK/100K", "SCORE", "TIER"
+            );
+            for j in &digest.jurisdictions {
+                let rt_s = j
+                    .dp_rt_latest
+                    .map(|r| format!("{r:.2}"))
+                    .unwrap_or_else(|| "--".to_string());
+                println!(
+                    "#{:<3} {:<8} {:<18} {:>9} {:>9.1}% {:>10.2} {:>8.1} {:>10}",
+                    j.rank,
+                    j.jurisdiction_id,
+                    j.label,
+                    rt_s,
+                    j.dp_peak_icu_utilization_pct,
+                    j.dp_recent_4wk_per_100k,
+                    j.comparative_risk_score,
+                    j.risk_tier.as_str()
+                );
+            }
         }
         "audit-verify" => {
             let limit: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);

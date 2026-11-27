@@ -627,7 +627,14 @@ pub fn fit_multinomial_lineage_logistics(
                 latest_variant_rt: latest_vrt,
             });
         } else {
-            let c_pos = non_ref_indices.iter().position(|&idx| idx == k).unwrap();
+            let c_pos = non_ref_indices
+                .iter()
+                .position(|&idx| idx == k)
+                .ok_or_else(|| {
+                    EpiError::Schema(format!(
+                        "Non-reference clade index {k} missing from logistic parameter vector"
+                    ))
+                })?;
             let (s_wk, se_wk, crossover) = match cfg.basis_mode {
                 LineageBasisMode::LogLinearFitness => {
                     let b0 = beta[c_pos * p_dim];
@@ -747,7 +754,11 @@ pub fn parse_lineage_counts_csv(text: &str, title: &str) -> Result<LineageCountT
         let lin_col = h_lower
             .iter()
             .position(|h| h == "lineage" || h == "clade" || h == "variant" || h == "pango_lineage")
-            .unwrap();
+            .ok_or_else(|| {
+                EpiError::Schema(
+                    "Tidy lineage CSV requires a lineage/clade/variant column".to_string(),
+                )
+            })?;
         let cnt_col = h_lower
             .iter()
             .position(|h| h.contains("seq") || h == "count" || h == "n" || h == "specimens")

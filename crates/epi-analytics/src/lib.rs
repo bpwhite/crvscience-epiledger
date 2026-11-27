@@ -13,11 +13,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+#![forbid(unsafe_code)]
+
 pub mod aberration;
 pub mod amr_antibiogram;
 pub mod capture_recapture;
 pub mod cfr_and_surge;
 pub mod dlnm_env;
+pub mod dp_risk_digest;
 pub mod euromomo_mortality;
 pub mod forecast_scoring;
 pub mod lineage_logistics;
@@ -60,6 +63,12 @@ pub use dlnm_env::{
     builtin_wildfire_pm25_dlnm_dataset, fit_dlnm_quasi_poisson, parse_dlnm_exposure_csv,
     CumulativeExposurePoint, DlnmConfig, DlnmDataset, DlnmFitResult, DlnmObservation,
     ExposureBasisKind, LagBasisKind, LagSlicePoint,
+};
+pub use dp_risk_digest::{
+    builtin_multi_jurisdiction_dp_inputs, builtin_multi_jurisdiction_dp_inputs_for_campaign,
+    compute_multi_jurisdiction_dp_risk_digest, export_dp_risk_digest_csv,
+    export_dp_risk_digest_json, DpRiskDigestConfig, DpRiskTier, JurisdictionDpRiskSummary,
+    JurisdictionSeriesInput, MultiJurisdictionDpRiskDigest,
 };
 pub use euromomo_mortality::{
     builtin_all_cause_weekly_mortality_dataset, compute_euromomo_excess_mortality,

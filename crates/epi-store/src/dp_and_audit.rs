@@ -533,7 +533,9 @@ fn sample_discrete_laplace_ctr(key: &[u8], counter: u64, alpha: f64) -> i64 {
         return 0;
     }
     let mac = hmac_sha256(key, &counter.to_le_bytes());
-    let u_raw = u64::from_le_bytes(mac[0..8].try_into().unwrap());
+    let u_raw = u64::from_le_bytes([
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mac[6], mac[7],
+    ]);
     // Uniform open interval (0, 1) with 53-bit mantissa precision
     let u = (((u_raw >> 11) as f64) + 0.5) / ((1u64 << 53) as f64);
 
@@ -569,7 +571,9 @@ pub fn sample_discrete_gaussian_ctr(key: &[u8], counter_base: u64, sigma: f64) -
 
         let ctr_acc = (counter_base << 16) | (attempt << 1) | 1;
         let mac = hmac_sha256(key, &ctr_acc.to_le_bytes());
-        let u_raw = u64::from_le_bytes(mac[0..8].try_into().unwrap());
+        let u_raw = u64::from_le_bytes([
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mac[6], mac[7],
+        ]);
         let u = (((u_raw >> 11) as f64) + 0.5) / ((1u64 << 53) as f64);
         if u <= accept_prob {
             return y;
