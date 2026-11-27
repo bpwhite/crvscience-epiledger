@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "SQLite WAL bitemporal vintage ledger, Discrete Laplace Differential Privacy budget ledger, tamper-evident SHA-256 hash-chained audit log, and hash-blocked 512-bit HMAC-SHA256 Bloom PPRL"
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 epi-core = { path = "../epi-core" }

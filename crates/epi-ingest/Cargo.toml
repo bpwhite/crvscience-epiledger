@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Dual-mode live API connectors (CDC SODA, CMU Delphi, openFDA, WHO GHO), NSSP ESSENCE chief-complaint/ICD-10-CM negation classifier, and offline clinical/archival parsers (HL7 v2.5.1 ELR/NSSP, HL7 FHIR R4, GeoJSON, CSV/TSV/JSON, and SAS XPORT v5 .XPT)"
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 epi-core = { path = "../epi-core" }

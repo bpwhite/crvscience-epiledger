@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Cross-platform native wgpu/egui 16-tab desktop workstation, headless ratatui SSH TUI, and scriptable CLI for EpiLedger"
+homepage.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "epiledger"

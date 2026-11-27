@@ -13,6 +13,8 @@ version = "2.0.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 authors = ["Bryan P. White <crvscience.com>"]
+homepage = "https://crvscience.com/apps"
+repository = "https://github.com/bpwhite/crvscience-epiledger"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
